@@ -1,0 +1,700 @@
+{
+  "results": {
+    "start": 100000,
+    "after_completed_purchase": 100000,
+    "after_pending_purchase": 100000,
+    "after_completed_deposit": 100000,
+    "after_pending_deposit": 100000,
+    "after_withdrawal": 100000,
+    "after_pending_to_completed": 100000,
+    "after_bill": 100000,
+    "a1_after_transfers": 100000,
+    "a2_after_transfers": 0,
+    "timing_s": {
+      "calls": 36,
+      "mean": 0.851,
+      "max": 2.329
+    }
+  },
+  "log": [
+    {
+      "req": "POST /customers",
+      "body": {
+        "first_name": "SMOKE",
+        "last_name": "TEST",
+        "address": {
+          "street_number": "1",
+          "street_name": "Test St",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94123"
+        }
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Customer created",
+        "objectCreated": {
+          "first_name": "SMOKE",
+          "last_name": "TEST",
+          "address": {
+            "street_number": "1",
+            "street_name": "Test St",
+            "city": "San Francisco",
+            "state": "CA",
+            "zip": "94123"
+          },
+          "_id": "5b211733-68c0-4865-a80c-d40945addfce"
+        }
+      }
+    },
+    {
+      "req": "POST /customers/5b211733-68c0-4865-a80c-d40945addfce/accounts",
+      "body": {
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Account created",
+        "objectCreated": {
+          "type": "Checking",
+          "nickname": "smoke A",
+          "rewards": 0,
+          "balance": 100000,
+          "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "account_number": "2479868942338437",
+          "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+        }
+      }
+    },
+    {
+      "req": "POST /customers/5b211733-68c0-4865-a80c-d40945addfce/accounts",
+      "body": {
+        "type": "Savings",
+        "nickname": "smoke B",
+        "rewards": 0,
+        "balance": 0
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Account created",
+        "objectCreated": {
+          "type": "Savings",
+          "nickname": "smoke B",
+          "rewards": 0,
+          "balance": 0,
+          "_id": "2d02e5b6-ab6a-470a-81f8-251cf102d24f",
+          "account_number": "9869892474758209",
+          "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+        }
+      }
+    },
+    {
+      "req": "POST /merchants",
+      "body": {
+        "name": "SMOKE Produce",
+        "category": "Food Supply",
+        "address": {
+          "street_number": "1",
+          "street_name": "Test St",
+          "city": "San Francisco",
+          "state": "CA",
+          "zip": "94123"
+        },
+        "geocode": {
+          "lat": 37.8,
+          "lng": -122.44
+        }
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Merchant created",
+        "objectCreated": {
+          "name": "SMOKE Produce",
+          "category": "Food Supply",
+          "address": {
+            "street_number": "1",
+            "street_name": "Test St",
+            "city": "San Francisco",
+            "state": "CA",
+            "zip": "94123"
+          },
+          "geocode": {
+            "lat": 37.8,
+            "lng": -122.44
+          },
+          "_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/purchases",
+      "body": {
+        "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+        "medium": "balance",
+        "amount": 1234,
+        "status": "completed",
+        "purchase_date": "2026-10-01",
+        "description": "completed purchase"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Purchase created",
+        "objectCreated": {
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "medium": "balance",
+          "purchase_date": "2026-10-01",
+          "amount": 1234,
+          "status": "completed",
+          "description": "completed purchase",
+          "_id": "6fc5b566-fe09-43f5-9f67-fc768e684d9f",
+          "type": "merchant",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/purchases",
+      "body": {
+        "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+        "medium": "balance",
+        "amount": 1000,
+        "status": "pending",
+        "purchase_date": "2026-10-02",
+        "description": "pending purchase"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Purchase created",
+        "objectCreated": {
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "medium": "balance",
+          "purchase_date": "2026-10-02",
+          "amount": 1000,
+          "status": "pending",
+          "description": "pending purchase",
+          "_id": "f55da8ea-1e2f-492a-af1a-c2dec6977a05",
+          "type": "merchant",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/deposits",
+      "body": {
+        "medium": "balance",
+        "transaction_date": "2026-10-03",
+        "status": "completed",
+        "amount": 5000,
+        "description": "completed deposit"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Deposit created",
+        "objectCreated": {
+          "medium": "balance",
+          "transaction_date": "2026-10-03",
+          "status": "completed",
+          "amount": 5000,
+          "description": "completed deposit",
+          "_id": "93878bf2-2a52-4c9d-a54e-867078b624da",
+          "creation_date": "2026-10-24"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/deposits",
+      "body": {
+        "medium": "balance",
+        "transaction_date": "2026-10-04",
+        "status": "pending",
+        "amount": 300,
+        "description": "pending deposit"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Deposit created",
+        "objectCreated": {
+          "medium": "balance",
+          "transaction_date": "2026-10-04",
+          "status": "pending",
+          "amount": 300,
+          "description": "pending deposit",
+          "_id": "2d859e96-8c4b-401a-bf2c-f11521e2fcb9",
+          "creation_date": "2026-10-24"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/withdrawals",
+      "body": {
+        "medium": "balance",
+        "amount": 700,
+        "transaction_date": "2026-10-05",
+        "status": "completed",
+        "description": "payroll"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Withdrawal created",
+        "objectCreated": {
+          "medium": "balance",
+          "transaction_date": "2026-10-05",
+          "status": "completed",
+          "amount": 700,
+          "description": "payroll",
+          "_id": "d5e08f04-14b6-4cb9-b1c6-790efb865e9f",
+          "creation_date": "2026-10-24",
+          "type": "withdrawal",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+        }
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "PUT /purchase/f55da8ea-1e2f-492a-af1a-c2dec6977a05",
+      "body": {
+        "status": "completed"
+      },
+      "status": 400,
+      "resp": "1 validation error for PurchaseUpdate\nstatus\n  extra fields not permitted (type=value_error.extra)"
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/bills",
+      "body": {
+        "status": "recurring",
+        "payee": "SMOKE Landlord",
+        "nickname": "rent",
+        "payment_date": "2026-11-01",
+        "recurring_date": 1,
+        "payment_amount": 950.5
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Bill created",
+        "objectCreated": {
+          "status": "recurring",
+          "payee": "SMOKE Landlord",
+          "nickname": "rent",
+          "payment_date": "2026-11-01",
+          "recurring_date": 1,
+          "payment_amount": 950.5,
+          "_id": "677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+          "creation_date": "2026-10-24",
+          "account_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "upcoming_payment_date": "2026-11-01"
+        }
+      }
+    },
+    {
+      "req": "PUT /bills/677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+      "body": {
+        "payment_date": "2026-11-16"
+      },
+      "status": 202,
+      "resp": {
+        "code": 202,
+        "message": "Accepted bill update",
+        "objectUpdated": {
+          "_id": "677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+          "recurring_date": 1,
+          "upcoming_payment_date": "2026-11-01",
+          "account_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "payee": "SMOKE Landlord",
+          "status": "recurring",
+          "nickname": "rent",
+          "payment_date": "2026-11-16",
+          "creation_date": "2026-10-24",
+          "payment_amount": 950.5
+        }
+      }
+    },
+    {
+      "req": "GET /bills/677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+        "status": "recurring",
+        "payee": "SMOKE Landlord",
+        "nickname": "rent",
+        "creation_date": "2026-10-24",
+        "payment_date": "2026-11-16",
+        "recurring_date": 1,
+        "upcoming_payment_date": "2026-11-01",
+        "payment_amount": 950.5,
+        "account_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/transfers",
+      "body": {
+        "transaction_date": "2026-10-06",
+        "status": "completed",
+        "amount": 100,
+        "description": "transfer test"
+      },
+      "status": 201,
+      "resp": {
+        "code": 201,
+        "message": "Transfer created",
+        "objectCreated": {
+          "transaction_date": "2026-10-06",
+          "status": "completed",
+          "amount": 100,
+          "description": "transfer test",
+          "_id": "4ee4453d-1600-4383-8358-75bdbf308eca"
+        }
+      }
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/transfers",
+      "body": {
+        "transaction_date": "2026-10-06",
+        "status": "completed",
+        "amount": 100,
+        "description": "transfer test",
+        "payee_id": "2d02e5b6-ab6a-470a-81f8-251cf102d24f"
+      },
+      "status": 400,
+      "resp": "1 validation error for TransferCreate\npayee_id\n  extra fields not permitted (type=value_error.extra)"
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/transfers",
+      "body": {
+        "transaction_date": "2026-10-06",
+        "status": "completed",
+        "amount": 100,
+        "description": "transfer test",
+        "payee": "2d02e5b6-ab6a-470a-81f8-251cf102d24f"
+      },
+      "status": 400,
+      "resp": "1 validation error for TransferCreate\npayee\n  extra fields not permitted (type=value_error.extra)"
+    },
+    {
+      "req": "POST /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/transfers",
+      "body": {
+        "transaction_date": "2026-10-06",
+        "status": "completed",
+        "amount": 100,
+        "description": "transfer test",
+        "medium": "balance"
+      },
+      "status": 400,
+      "resp": "1 validation error for TransferCreate\nmedium\n  extra fields not permitted (type=value_error.extra)"
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+        "type": "Checking",
+        "nickname": "smoke A",
+        "rewards": 0,
+        "balance": 100000,
+        "account_number": "2479868942338437",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "GET /accounts/2d02e5b6-ab6a-470a-81f8-251cf102d24f",
+      "body": null,
+      "status": 200,
+      "resp": {
+        "_id": "2d02e5b6-ab6a-470a-81f8-251cf102d24f",
+        "type": "Savings",
+        "nickname": "smoke B",
+        "rewards": 0,
+        "balance": 0,
+        "account_number": "9869892474758209",
+        "customer_id": "5b211733-68c0-4865-a80c-d40945addfce"
+      }
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/purchases",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "6fc5b566-fe09-43f5-9f67-fc768e684d9f",
+          "type": "merchant",
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "purchase_date": "2026-10-01",
+          "amount": 1234,
+          "status": "completed",
+          "medium": "balance",
+          "description": "completed purchase"
+        },
+        {
+          "_id": "f55da8ea-1e2f-492a-af1a-c2dec6977a05",
+          "type": "merchant",
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "purchase_date": "2026-10-02",
+          "amount": 1000,
+          "status": "pending",
+          "medium": "balance",
+          "description": "pending purchase"
+        }
+      ]
+    },
+    {
+      "req": "GET /merchants/fdd41a2a-d172-4013-8dd2-a2a39e05acec/purchases",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "6fc5b566-fe09-43f5-9f67-fc768e684d9f",
+          "type": "merchant",
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "purchase_date": "2026-10-01",
+          "amount": 1234,
+          "status": "completed",
+          "medium": "balance",
+          "description": "completed purchase"
+        },
+        {
+          "_id": "f55da8ea-1e2f-492a-af1a-c2dec6977a05",
+          "type": "merchant",
+          "merchant_id": "fdd41a2a-d172-4013-8dd2-a2a39e05acec",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "purchase_date": "2026-10-02",
+          "amount": 1000,
+          "status": "pending",
+          "medium": "balance",
+          "description": "pending purchase"
+        }
+      ]
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/deposits",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "2d859e96-8c4b-401a-bf2c-f11521e2fcb9",
+          "medium": "balance",
+          "transaction_date": "2026-10-04",
+          "status": "pending",
+          "amount": 300,
+          "description": "pending deposit"
+        },
+        {
+          "_id": "93878bf2-2a52-4c9d-a54e-867078b624da",
+          "medium": "balance",
+          "transaction_date": "2026-10-03",
+          "status": "completed",
+          "amount": 5000,
+          "description": "completed deposit"
+        }
+      ]
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/withdrawals",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "d5e08f04-14b6-4cb9-b1c6-790efb865e9f",
+          "type": "withdrawal",
+          "transaction_date": "2026-10-05",
+          "status": "completed",
+          "payer_id": "976ef428-e89e-4449-8acc-f43e2a670b92",
+          "medium": "balance",
+          "amount": 700,
+          "description": "payroll"
+        }
+      ]
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/bills",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+          "status": "recurring",
+          "payee": "SMOKE Landlord",
+          "nickname": "rent",
+          "creation_date": "2026-10-24",
+          "payment_date": "2026-11-16",
+          "recurring_date": 1,
+          "upcoming_payment_date": "2026-11-01",
+          "payment_amount": 950.5,
+          "account_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+        }
+      ]
+    },
+    {
+      "req": "GET /accounts/976ef428-e89e-4449-8acc-f43e2a670b92/transfers",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "id": "4ee4453d-1600-4383-8358-75bdbf308eca",
+          "transaction_date": "2026-10-06",
+          "status": "completed",
+          "amount": 100,
+          "description": "transfer test"
+        }
+      ]
+    },
+    {
+      "req": "GET /customers/5b211733-68c0-4865-a80c-d40945addfce/bills",
+      "body": null,
+      "status": 200,
+      "resp": [
+        {
+          "_id": "677d29df-82d7-4b2e-bbd2-b7ce22f19bed",
+          "status": "recurring",
+          "payee": "SMOKE Landlord",
+          "nickname": "rent",
+          "creation_date": "2026-10-24",
+          "payment_date": "2026-11-16",
+          "recurring_date": 1,
+          "upcoming_payment_date": "2026-11-01",
+          "payment_amount": 950.5,
+          "account_id": "976ef428-e89e-4449-8acc-f43e2a670b92"
+        }
+      ]
+    },
+    {
+      "req": "DELETE /accounts/976ef428-e89e-4449-8acc-f43e2a670b92",
+      "body": null,
+      "status": 200,
+      "resp": ""
+    },
+    {
+      "req": "DELETE /accounts/2d02e5b6-ab6a-470a-81f8-251cf102d24f",
+      "body": null,
+      "status": 200,
+      "resp": ""
+    }
+  ]
+}
