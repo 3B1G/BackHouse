@@ -264,7 +264,7 @@ def first_on_or_after(d0, weekday):
     return d0 + timedelta((weekday - d0.weekday()) % 7)
 
 
-D3_REF = first_on_or_after(date(2026, 3, 3), 1)          # Sonoma Dairy standing order, UNI, two Tuesdays
+D3_REF = first_on_or_after(date(2026, 3, 3), 1)          # Sonoma Dairy standing order at C.ALT_LOC, two Tuesdays
 D3_TGT = D3_REF + timedelta(7)
 CM_DAY = first_on_or_after(date(2026, 3, 10), 1)         # Northbay Protein Co short-ships salmon at CHS
 d3_lines = None
@@ -278,7 +278,7 @@ for loc in C.LOCATIONS:
             nd = next(d + timedelta(k) for k in range(1, 15) if (d + timedelta(k)).weekday() in ddays and is_open(loc, d + timedelta(k)))
             cover = (nd - d).days
             ln = []
-            if loc == "UNI" and sup == "Sonoma Dairy Supply" and d == D3_TGT and d3_lines:
+            if loc == C.ALT_LOC and sup == "Sonoma Dairy Supply" and d == D3_TGT and d3_lines:
                 ln = list(d3_lines)                         # standing order at contract prices
             else:
                 for g in by_sup[sup]:
@@ -288,7 +288,7 @@ for loc in C.LOCATIONS:
                     if need > 0:
                         pack = C.INGREDIENTS[g][5]
                         ln.append((g, math.ceil(need / pack) * pack, round(ing_price(g, d) * rng.lognormal(0, 0.005), 4)))
-            if loc == "UNI" and sup == "Sonoma Dairy Supply" and d == D3_REF:
+            if loc == C.ALT_LOC and sup == "Sonoma Dairy Supply" and d == D3_REF:
                 d3_lines = list(ln)
             if not ln:
                 continue
@@ -333,7 +333,7 @@ while pay <= C.END + timedelta(14):
     for loc, L in C.LOCATIONS.items():
         dm = (DAILY.location == loc) & DAILY.date.between(p_start, p_end)
         hourly = int(DAILY.loc[dm, "wages_cents"].sum())
-        share = 0.6 if loc == "CHS" else 0.4
+        share = C.SALARY_SHARE[loc]
         salary = cents((L["gm_salary"] + share * sum(C.SHARED_SALARIES.values())) / 26 * 100)
         tk = T[(T.location == loc) & T.date.between(p_start, p_end)]
         tips = int(tk.tip.sum())
@@ -495,7 +495,7 @@ for d, loc, amt in C.CHARGEBACKS:
     disputes.append(dict(case_id=cid, location=loc, opened=d - timedelta(9), debited=d, amount=amt, outcome="lost"))
     LG(loc, d, "withdrawal", "out", amt, C.PROCESSOR, f"TABLETAP CHARGEBACK {cid}", "chargeback", cid)
 
-# keep only the bank window, then add sweeps that keep UNI inside its band
+# keep only the bank window, then add sweeps that keep UNI inside its band (two-location mode only)
 ledger = [l for l in ledger if C.START <= l["date"] <= C.END]
 
 
@@ -513,7 +513,7 @@ def xfer(d, src, dst, amt, ref):
 xfer(C.RESERVE_DRAW[0], "RES", "CHS", C.RESERVE_DRAW[1], "XFER-RES-1")
 for ym in pd.period_range(C.START, C.END, freq="M"):
     d = next_bday(date(ym.year, ym.month, 26))
-    if not (C.START <= d <= C.END):
+    if "UNI" not in C.ACCOUNTS or not (C.START <= d <= C.END):    # sweeps only exist with two locations
         continue
     b = balance_on(ledger, "UNI", d + timedelta(10))
     if b < C.SWEEP_LOW or b > C.SWEEP_HIGH:
@@ -546,9 +546,9 @@ BANK = pd.concat([BANK, dup.to_frame().T], ignore_index=True)
 key.append(dict(id="E1", kind="duplicate_charge", account="CHS", date=str(BANK.loc[i, "date"]), books_ref=BANK.loc[i, "books_ref"],
                 impact_cents=int(BANK.loc[i, "amount"]), explanation="Supplier ACH debited twice for one invoice."))
 # E2 debit above invoice
-i = find(account="UNI", kind="supplier_payment", counterparty="Northbay Protein Co", date=(date(2026, 5, 4), date(2026, 5, 15)))
+i = find(account=C.ALT_LOC, kind="supplier_payment", counterparty="Northbay Protein Co", date=(date(2026, 5, 4), date(2026, 5, 15)))
 BANK.loc[i, "amount"] = int(BANK.loc[i, "amount"]) + 100_00; BANK.loc[i, "planted"] = "E2"
-key.append(dict(id="E2", kind="supplier_overcharge", account="UNI", date=str(BANK.loc[i, "date"]), books_ref=BANK.loc[i, "books_ref"],
+key.append(dict(id="E2", kind="supplier_overcharge", account=C.ALT_LOC, date=str(BANK.loc[i, "date"]), books_ref=BANK.loc[i, "books_ref"],
                 impact_cents=100_00, explanation="Supplier debit is $100.00 above the invoice it pays."))
 # E3 delivery commission at 20% for three June weeks (one root cause)
 imp = 0
@@ -577,9 +577,9 @@ for i in idx:
 key.append(dict(id="E4", kind="card_fee_creep", account="CHS", date=str(creep_from), books_ref="BATCH-CHS-* (sale date >= 2026-08-01)",
                 impact_cents=imp, explanation="Processor charges 2.9% instead of the agreed 2.6% on every CHS batch for sales from 2026-08-01."))
 # E5 cash deposit short of the deposit slip
-i = find(account="UNI", kind="cash_deposit", date=(date(2026, 2, 10), date(2026, 2, 13)))
+i = find(account=C.ALT_LOC, kind="cash_deposit", date=(date(2026, 2, 10), date(2026, 2, 13)))
 BANK.loc[i, "amount"] = int(BANK.loc[i, "amount"]) - 200_00; BANK.loc[i, "planted"] = "E5"
-key.append(dict(id="E5", kind="cash_deposit_short", account="UNI", date=str(BANK.loc[i, "date"]), books_ref=BANK.loc[i, "books_ref"],
+key.append(dict(id="E5", kind="cash_deposit_short", account=C.ALT_LOC, date=str(BANK.loc[i, "date"]), books_ref=BANK.loc[i, "books_ref"],
                 impact_cents=200_00, explanation="Bank credited $200 less than the deposit slip."))
 # E6 charge with no document in the books
 row = dict(txn_id=None, account="CHS", date=date(2026, 7, 9), nessie_type="purchase", direction="out", amount=349_00,
@@ -588,10 +588,10 @@ BANK = pd.concat([BANK, pd.DataFrame([row])], ignore_index=True)
 key.append(dict(id="E6", kind="unrecorded_charge", account="CHS", date="2026-07-09", books_ref=None, impact_cents=349_00,
                 explanation="Charge with no bill, invoice, agreement or log entry in the books."))
 # E7 invoice due inside the window but never paid
-i = find(account="UNI", kind="supplier_payment", counterparty="Sonoma Dairy Supply", date=(date(2026, 9, 28), date(2026, 10, 9)))
+i = find(account=C.ALT_LOC, kind="supplier_payment", counterparty="Sonoma Dairy Supply", date=(date(2026, 9, 28), date(2026, 10, 9)))
 E7_ref, E7_amt, E7_date = BANK.loc[i, "books_ref"], int(BANK.loc[i, "amount"]), str(BANK.loc[i, "date"])
 BANK = BANK.drop(index=i)
-key.append(dict(id="E7", kind="missed_payment", account="UNI", date=E7_date, books_ref=E7_ref, impact_cents=E7_amt,
+key.append(dict(id="E7", kind="missed_payment", account=C.ALT_LOC, date=E7_date, books_ref=E7_ref, impact_cents=E7_amt,
                 explanation="Invoice past due in the books; no payment ever left the bank (late-fee and supplier risk)."))
 
 # assign bank-side ids only after planting (content-derived, see below)
@@ -622,7 +622,7 @@ for k in key:
 decoy("D1", "credit_memo_refund", BANK.books_ref == "CM-2207", "Inbound from a supplier; books hold credit memo CM-2207.")
 decoy("D2", "split_payment", (BANK.books_ref == D2.invoice_no) & (BANK.kind == "supplier_payment"),
       f"Two installments for {D2.invoice_no}; books hold the payment plan.")
-d3 = INV[(INV.location == "UNI") & (INV.supplier == "Sonoma Dairy Supply") & INV.invoice_date.isin([D3_REF, D3_TGT])].invoice_no
+d3 = INV[(INV.location == C.ALT_LOC) & (INV.supplier == "Sonoma Dairy Supply") & INV.invoice_date.isin([D3_REF, D3_TGT])].invoice_no
 decoy("D3", "standing_order_same_amount", BANK.books_ref.isin(d3), "Identical amounts a week apart, same memo; two different standing-order invoices.")
 decoy("D4", "documented_chargeback", BANK.kind == "chargeback", "Processor chargebacks; books hold the dispute log.")
 is_batch = BANK.kind == "card_settlement"

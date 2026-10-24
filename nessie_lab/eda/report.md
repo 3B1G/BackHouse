@@ -19,7 +19,7 @@ Bank window 2025-10-25 to 2026-10-24. Backtest trains through 2026-07-24.
 | no grader columns in bank feed         | True   |
 | no negative daily balance              | True   |
 
-Lowest daily balance by account ($): {'CHS': 116259, 'UNI': 19836, 'RES': 25000}
+Lowest daily balance by account ($): {'CHS': 99716, 'RES': 25000}
 
 
 ## 2. Revenue and operations
@@ -28,57 +28,55 @@ Lowest daily balance by account ($): {'CHS': 116259, 'UNI': 19836, 'RES': 25000}
 
 | location   |   avg_daily_rev |   covers |   delivery_share |   rev_per_labor_hr |   covers_per_seat |
 |:-----------|----------------:|---------:|-----------------:|-------------------:|------------------:|
-| CHS        |         4789.54 |   112.14 |             0.15 |              80.08 |              1.87 |
-| UNI        |         3543.77 |    84.3  |             0.15 |              78.65 |              1.87 |
+| CHS        |         4777.76 |   111.69 |             0.14 |               79.9 |              1.86 |
 
 Dine-in check per cover ($):
 
 | location   |   dinner |   lunch |
 |:-----------|---------:|--------:|
-| CHS        |    47.78 |   31.85 |
-| UNI        |    47.97 |   31.84 |
+| CHS        |    47.87 |   31.93 |
 
 Average revenue by weekday ($):
 
-| dow   |   CHS |   UNI |
-|:------|------:|------:|
-| Mon   |  3351 |   nan |
-| Tue   |  3533 |  2584 |
-| Wed   |  4017 |  3022 |
-| Thu   |  4407 |  3255 |
-| Fri   |  6220 |  4219 |
-| Sat   |  6855 |  4502 |
-| Sun   |  5088 |  3653 |
+| dow   |   CHS |
+|:------|------:|
+| Mon   |  3324 |
+| Tue   |  3544 |
+| Wed   |  4006 |
+| Thu   |  4590 |
+| Fri   |  6175 |
+| Sat   |  6567 |
+| Sun   |  5196 |
 
-Labor hours vs covers correlation: {'CHS': 0.93, 'UNI': 0.9} (staff are scheduled from a forecast, then cut or called in).
+Labor hours vs covers correlation: {'CHS': 0.91} (staff are scheduled from a forecast, then cut or called in).
 
 
 ## 3. Monthly P&L (accrual) vs NRA benchmarks
 
 | month   |   revenue_$ |   cogs_% |   labor_excl_tips_% |   occupancy_% |   net_cash_$ |
 |:--------|------------:|---------:|--------------------:|--------------:|-------------:|
-| 2025-10 |     55641.9 |    0.306 |               0.862 |         0.286 |    -25019.7  |
-| 2025-11 |    233777   |    0.302 |               0.405 |         0.068 |    -19459.1  |
-| 2025-12 |    251349   |    0.304 |               0.366 |         0.063 |     57345.1  |
-| 2026-01 |    205239   |    0.304 |               0.443 |         0.077 |    -35828.2  |
-| 2026-02 |    190396   |    0.309 |               0.467 |         0.084 |    -23640.7  |
-| 2026-03 |    228586   |    0.33  |               0.398 |         0.07  |     14772.4  |
-| 2026-04 |    225986   |    0.331 |               0.41  |         0.072 |    -11772.6  |
-| 2026-05 |    260295   |    0.321 |               0.54  |         0.062 |    -67385    |
-| 2026-06 |    250172   |    0.326 |               0.383 |         0.065 |     27026.3  |
-| 2026-07 |    249839   |    0.325 |               0.388 |         0.065 |     -5705.99 |
-| 2026-08 |    235970   |    0.325 |               0.406 |         0.069 |     -1472.34 |
-| 2026-09 |    241030   |    0.326 |               0.394 |         0.067 |      7808.43 |
-| 2026-10 |    212435   |    0.33  |               0.455 |         0.076 |    -23736.3  |
+| 2025-10 |     35428.2 |    0.288 |               0.843 |         0.265 |    -13655.1  |
+| 2025-11 |    141165   |    0.302 |               0.416 |         0.067 |    -13600.9  |
+| 2025-12 |    153032   |    0.304 |               0.376 |         0.061 |     29137.9  |
+| 2026-01 |    124113   |    0.301 |               0.455 |         0.076 |    -23236.4  |
+| 2026-02 |    121577   |    0.308 |               0.459 |         0.077 |     -9282.68 |
+| 2026-03 |    143720   |    0.325 |               0.393 |         0.065 |      6798.66 |
+| 2026-04 |    141714   |    0.327 |               0.409 |         0.068 |     -6109.25 |
+| 2026-05 |    159478   |    0.325 |               0.546 |         0.061 |    -38555    |
+| 2026-06 |    153234   |    0.323 |               0.388 |         0.063 |     11627    |
+| 2026-07 |    148307   |    0.324 |               0.406 |         0.065 |     -9627.17 |
+| 2026-08 |    140331   |    0.324 |               0.421 |         0.069 |     -2743.7  |
+| 2026-09 |    144475   |    0.33  |               0.405 |         0.067 |      2490.26 |
+| 2026-10 |    127756   |    0.331 |               0.472 |         0.076 |    -15612    |
 
 Full months only:
 
 | metric                          |   ours |   NRA median (full-service) |
 |:--------------------------------|-------:|----------------------------:|
 | food & bev cost (COGS)          |  0.318 |                       0.32  |
-| payroll + benefits (excl. tips) |  0.418 |                       0.365 |
-| occupancy                       |  0.069 |                       0.06  |
-| net cash margin                 | -0.038 |                       0.028 |
+| payroll + benefits (excl. tips) |  0.425 |                       0.365 |
+| occupancy                       |  0.067 |                       0.06  |
+| net cash margin                 | -0.047 |                       0.028 |
 
 Labor is accrued on pay date; May 2026 has three paydays, so its labor % is a cash-timing spike, not a rate change. First and last months are partial.
 
@@ -89,78 +87,78 @@ Labor is accrued on pay date; May 2026 has three paydays, so its labor % is a ca
 
 | item                      | course   |   avg_price 2025-11 |   avg_price 2026-10 |   cm_per_plate 2025-11 |   cm_per_plate 2026-10 |   plate_cost 2025-11 |   plate_cost 2026-10 |
 |:--------------------------|:---------|--------------------:|--------------------:|-----------------------:|-----------------------:|---------------------:|---------------------:|
-| Arancini                  | starter  |               14.36 |               14.32 |                   9.48 |                   9.25 |                 4.1  |                 4.33 |
-| Bolognese                 | main     |               25.5  |               26.38 |                  15.79 |                  16.39 |                 8.21 |                 8.55 |
-| Bottle of Wine            | bottle   |               56.38 |               56.45 |                  32.08 |                  32.44 |                22.58 |                22.29 |
-| Braised Short Rib         | main     |               37.26 |               36.88 |                  17.59 |                  17.11 |                17.37 |                17.82 |
-| Burrata & Heirloom Tomato | starter  |               17.32 |               17.27 |                   9.85 |                   9.66 |                 6.64 |                 6.84 |
-| Cacio e Pepe              | main     |               22.8  |               22.44 |                  15.69 |                  15.31 |                 5.75 |                 5.92 |
-| Caesar Salad              | starter  |               14.31 |               15.26 |                   9.46 |                  10.11 |                 4.11 |                 4.42 |
-| Chicken Parmesan          | main     |               27.54 |               28.12 |                  17.44 |                  17.78 |                 8.46 |                 8.93 |
-| Cocktail                  | drink    |               15    |               15    |                  12.42 |                  12.18 |                 2.12 |                 2.36 |
-| Diavola Pizza             | main     |               22.56 |               22.5  |                  15.59 |                  15.33 |                 5.7  |                 5.92 |
-| Draft Beer                | drink    |                9    |                9    |                   7.33 |                   7.34 |                 1.4  |                 1.39 |
+| Arancini                  | starter  |               14.31 |               14.2  |                   9.48 |                   9.25 |                 4.1  |                 4.33 |
+| Bolognese                 | main     |               25.63 |               25.89 |                  16.03 |                  16.07 |                 8.19 |                 8.56 |
+| Bottle of Wine            | bottle   |               56.66 |               56.88 |                  32.2  |                  32.8  |                22.74 |                22.35 |
+| Braised Short Rib         | main     |               37.55 |               37.85 |                  18.2  |                  17.98 |                17.26 |                17.77 |
+| Burrata & Heirloom Tomato | starter  |               17.35 |               17.36 |                   9.85 |                   9.63 |                 6.64 |                 6.87 |
+| Cacio e Pepe              | main     |               22.66 |               22.19 |                  15.59 |                  15.24 |                 5.74 |                 5.92 |
+| Caesar Salad              | starter  |               14.37 |               15.23 |                   9.47 |                  10.11 |                 4.11 |                 4.42 |
+| Chicken Parmesan          | main     |               27.29 |               28.1  |                  17.29 |                  17.68 |                 8.47 |                 8.94 |
+| Cocktail                  | drink    |               15    |               15    |                  12.42 |                  12.19 |                 2.12 |                 2.35 |
+| Diavola Pizza             | main     |               22.54 |               22.68 |                  15.51 |                  15.54 |                 5.7  |                 5.93 |
+| Draft Beer                | drink    |                9    |                9    |                   7.34 |                   7.34 |                 1.39 |                 1.39 |
 | Espresso                  | drink    |                4.5  |                4.5  |                   3.71 |                   3.65 |                 0.65 |                 0.71 |
-| Funghi Pizza              | main     |               21.69 |               21.63 |                  14.86 |                  14.42 |                 5.59 |                 5.94 |
-| Garlic Bread              | starter  |                9.26 |                9.13 |                   7.05 |                   6.98 |                 1.71 |                 1.76 |
-| Grilled Salmon            | main     |               33.09 |               32.98 |                  19.33 |                  18.59 |                11.82 |                12.49 |
-| House Wine (glass)        | drink    |               14    |               14    |                  10.11 |                  10.02 |                 3.46 |                 3.55 |
-| Lobster Ravioli           | main     |               27.42 |               27.07 |                  11.84 |                  -0.18 |                14.05 |                25.8  |
-| Margherita Pizza          | main     |               17.52 |               17.41 |                  11.65 |                  11.33 |                 4.9  |                 5.23 |
-| Mushroom Risotto          | main     |               24.43 |               24.18 |                  15.54 |                  15.51 |                 7.45 |                 7.5  |
-| Panna Cotta               | dessert  |               11.21 |               11.18 |                   8.24 |                   8.33 |                 2.42 |                 2.34 |
-| Rigatoni alla Vodka       | main     |               21.6  |               21.58 |                  14.8  |                  14.83 |                 5.58 |                 5.58 |
-| Shrimp Linguine           | main     |               28.59 |               28.02 |                  17.24 |                  16.64 |                 9.61 |                 9.95 |
-| Soda                      | drink    |                4.6  |                4.58 |                   3.91 |                   3.88 |                 0.43 |                 0.46 |
-| Spaghetti Pomodoro        | main     |               20.66 |               20.41 |                  13.89 |                  13.44 |                 5.66 |                 5.88 |
-| Tiramisu                  | dessert  |               12.29 |               13.26 |                   8.54 |                   9.38 |                 3.14 |                 3.25 |
+| Funghi Pizza              | main     |               21.55 |               21.77 |                  14.75 |                  14.67 |                 5.57 |                 5.93 |
+| Garlic Bread              | starter  |                9.2  |                9.22 |                   7.04 |                   7    |                 1.71 |                 1.76 |
+| Grilled Salmon            | main     |               32.84 |               32.95 |                  19.24 |                  18.79 |                11.82 |                12.42 |
+| House Wine (glass)        | drink    |               14    |               14    |                  10.11 |                  10.03 |                 3.46 |                 3.54 |
+| Lobster Ravioli           | main     |               27.68 |               27.25 |                  11.98 |                   0.03 |                14.04 |                25.87 |
+| Margherita Pizza          | main     |               17.67 |               17.51 |                  11.81 |                  11.38 |                 4.89 |                 5.23 |
+| Mushroom Risotto          | main     |               24.14 |               24.11 |                  15.44 |                  15.35 |                 7.41 |                 7.51 |
+| Panna Cotta               | dessert  |               11.19 |               11.17 |                   8.25 |                   8.32 |                 2.41 |                 2.34 |
+| Rigatoni alla Vodka       | main     |               21.44 |               21.19 |                  14.7  |                  14.56 |                 5.57 |                 5.58 |
+| Shrimp Linguine           | main     |               28.35 |               28.22 |                  17.01 |                  16.76 |                 9.61 |                 9.94 |
+| Soda                      | drink    |                4.59 |                4.58 |                   3.91 |                   3.89 |                 0.43 |                 0.45 |
+| Spaghetti Pomodoro        | main     |               20.52 |               20.58 |                  13.78 |                  13.61 |                 5.66 |                 5.89 |
+| Tiramisu                  | dessert  |               12.3  |               13.22 |                   8.53 |                   9.38 |                 3.14 |                 3.24 |
 
 Lobster Ravioli by month:
 
 | month   |   avg_price |   plate_cost |   cm_per_plate |   units |
 |:--------|------------:|-------------:|---------------:|--------:|
-| 2025-10 |       27.77 |        13.94 |          12.07 |      88 |
-| 2025-11 |       27.42 |        14.05 |          11.84 |     328 |
-| 2025-12 |       27.68 |        14.4  |          11.73 |     361 |
-| 2026-01 |       27.37 |        14.07 |          11.72 |     338 |
-| 2026-02 |       27.62 |        14.16 |          11.79 |     292 |
-| 2026-03 |       27.43 |        25.48 |           0.44 |     341 |
-| 2026-04 |       27.18 |        25.3  |           0.49 |     331 |
-| 2026-05 |       27.49 |        24.34 |           1.59 |     373 |
-| 2026-06 |       27.24 |        24.63 |           1.25 |     385 |
-| 2026-07 |       27.14 |        25.49 |           0.25 |     336 |
-| 2026-08 |       27.53 |        25.64 |           0.47 |     362 |
-| 2026-09 |       27.33 |        25.88 |           0    |     343 |
-| 2026-10 |       27.07 |        25.8  |          -0.18 |     299 |
+| 2025-10 |       27.51 |        13.95 |          12    |      53 |
+| 2025-11 |       27.68 |        14.04 |          11.98 |     202 |
+| 2025-12 |       27.36 |        14.43 |          11.43 |     235 |
+| 2026-01 |       27.37 |        14.08 |          11.79 |     194 |
+| 2026-02 |       27.69 |        14.12 |          11.85 |     153 |
+| 2026-03 |       27.32 |        25.45 |           0.39 |     207 |
+| 2026-04 |       27.44 |        25.51 |           0.46 |     211 |
+| 2026-05 |       27.53 |        24.29 |           1.79 |     264 |
+| 2026-06 |       27.14 |        24.59 |           1.06 |     230 |
+| 2026-07 |       26.83 |        25.61 |          -0.08 |     196 |
+| 2026-08 |       27.35 |        25.56 |           0.33 |     202 |
+| 2026-09 |       27.2  |        25.94 |          -0.26 |     228 |
+| 2026-10 |       27.25 |        25.87 |           0.03 |     192 |
 
 Menu-engineering classes, last month:
 
 | item                      | course   | menu_class   |   units |   food_cost_pct |   loses_money |
 |:--------------------------|:---------|:-------------|--------:|----------------:|--------------:|
-| Panna Cotta               | dessert  | plowhorse    |     385 |           0.209 |             0 |
-| Tiramisu                  | dessert  | star         |     571 |           0.245 |             0 |
-| Draft Beer                | drink    | dog          |     552 |           0.154 |             0 |
-| Espresso                  | drink    | plowhorse    |     627 |           0.158 |             0 |
-| Soda                      | drink    | plowhorse    |    1144 |           0.1   |             0 |
-| Cocktail                  | drink    | star         |     667 |           0.157 |             0 |
-| House Wine (glass)        | drink    | star         |    1413 |           0.254 |             0 |
-| Lobster Ravioli           | main     | plowhorse    |     299 |           0.953 |             1 |
-| Margherita Pizza          | main     | plowhorse    |     519 |           0.3   |             0 |
-| Spaghetti Pomodoro        | main     | plowhorse    |     372 |           0.288 |             0 |
-| Braised Short Rib         | main     | puzzle       |     225 |           0.483 |             0 |
-| Funghi Pizza              | main     | puzzle       |     244 |           0.275 |             0 |
-| Bolognese                 | main     | star         |     492 |           0.324 |             0 |
-| Cacio e Pepe              | main     | star         |     344 |           0.264 |             0 |
-| Chicken Parmesan          | main     | star         |     468 |           0.318 |             0 |
-| Diavola Pizza             | main     | star         |     350 |           0.263 |             0 |
-| Grilled Salmon            | main     | star         |     254 |           0.379 |             0 |
-| Mushroom Risotto          | main     | star         |     280 |           0.31  |             0 |
-| Rigatoni alla Vodka       | main     | star         |     544 |           0.259 |             0 |
-| Shrimp Linguine           | main     | star         |     320 |           0.355 |             0 |
-| Garlic Bread              | starter  | plowhorse    |     475 |           0.193 |             0 |
-| Arancini                  | starter  | star         |     403 |           0.302 |             0 |
-| Burrata & Heirloom Tomato | starter  | star         |     459 |           0.396 |             0 |
-| Caesar Salad              | starter  | star         |     519 |           0.29  |             0 |
+| Panna Cotta               | dessert  | plowhorse    |     207 |           0.209 |             0 |
+| Tiramisu                  | dessert  | star         |     375 |           0.245 |             0 |
+| Draft Beer                | drink    | dog          |     316 |           0.154 |             0 |
+| Espresso                  | drink    | dog          |     362 |           0.158 |             0 |
+| Soda                      | drink    | plowhorse    |     670 |           0.098 |             0 |
+| Cocktail                  | drink    | star         |     384 |           0.157 |             0 |
+| House Wine (glass)        | drink    | star         |     866 |           0.253 |             0 |
+| Lobster Ravioli           | main     | plowhorse    |     192 |           0.949 |             0 |
+| Margherita Pizza          | main     | plowhorse    |     317 |           0.299 |             0 |
+| Spaghetti Pomodoro        | main     | plowhorse    |     211 |           0.286 |             0 |
+| Braised Short Rib         | main     | puzzle       |     137 |           0.469 |             0 |
+| Funghi Pizza              | main     | puzzle       |     149 |           0.272 |             0 |
+| Bolognese                 | main     | star         |     276 |           0.331 |             0 |
+| Cacio e Pepe              | main     | star         |     205 |           0.267 |             0 |
+| Chicken Parmesan          | main     | star         |     271 |           0.318 |             0 |
+| Diavola Pizza             | main     | star         |     202 |           0.261 |             0 |
+| Grilled Salmon            | main     | star         |     171 |           0.377 |             0 |
+| Mushroom Risotto          | main     | star         |     166 |           0.311 |             0 |
+| Rigatoni alla Vodka       | main     | star         |     319 |           0.263 |             0 |
+| Shrimp Linguine           | main     | star         |     181 |           0.352 |             0 |
+| Garlic Bread              | starter  | plowhorse    |     275 |           0.191 |             0 |
+| Arancini                  | starter  | star         |     259 |           0.305 |             0 |
+| Burrata & Heirloom Tomato | starter  | star         |     251 |           0.396 |             0 |
+| Caesar Salad              | starter  | star         |     322 |           0.29  |             0 |
 
 
 ## 5. Ingredient prices
@@ -169,46 +167,46 @@ Menu-engineering classes, last month:
 
 | ingredient   |   index_vs_first |
 |:-------------|-----------------:|
-| lobster      |            2.106 |
-| eggs         |            1.198 |
-| olive_oil    |            1.139 |
-| potato       |            1.126 |
-| tomato       |            1.115 |
-| ground_beef  |            1.113 |
+| lobster      |            2.12  |
+| eggs         |            1.186 |
+| olive_oil    |            1.136 |
+| potato       |            1.134 |
+| ground_beef  |            1.115 |
+| tomato       |            1.114 |
 
 
 ## 6. Cash
 
 ![](cash_balance.png)
 
-Cash on 2026-10-24: **$232,932**. Net cash over the window: **$-107,068**. See scenario_check.py for the forward view.
+Cash on 2026-10-24: **$157,631**. Net cash over the window: **$-82,369**. See scenario_check.py for the forward view.
 
 
 ## 7. Bank feed by Nessie type and category
 
 | nessie_type   | category                |   rows |   total_usd |
 |:--------------|:------------------------|-------:|------------:|
-| deposit       | Internal                |      4 |      122000 |
-| deposit       | Sales - Card            |    672 |     2727682 |
-| deposit       | Sales - Cash            |    204 |      229208 |
-| deposit       | Sales - Delivery        |    208 |      351977 |
-| deposit       | Supplier Credit         |      1 |          95 |
-| purchase      | Beverage                |    104 |      159811 |
-| purchase      | Direct Operating        |     48 |      108682 |
-| purchase      | Food Supply - Dairy     |    207 |      246898 |
-| purchase      | Food Supply - Dry Goods |    101 |      148054 |
-| purchase      | Food Supply - Produce   |    249 |       74662 |
-| purchase      | Food Supply - Protein   |    208 |      267235 |
-| purchase      | G&A                     |     15 |       18415 |
+| deposit       | Internal                |      1 |       15000 |
+| deposit       | Sales - Card            |    362 |     1676843 |
+| deposit       | Sales - Cash            |    102 |      139064 |
+| deposit       | Sales - Delivery        |    104 |      206910 |
+| deposit       | Supplier Credit         |      1 |          94 |
+| purchase      | Beverage                |     52 |       98709 |
+| purchase      | Direct Operating        |     24 |       61927 |
+| purchase      | Food Supply - Dairy     |    103 |      150111 |
+| purchase      | Food Supply - Dry Goods |     51 |       89822 |
+| purchase      | Food Supply - Produce   |    157 |       45798 |
+| purchase      | Food Supply - Protein   |    104 |      162562 |
+| purchase      | G&A                     |     14 |       17315 |
 | purchase      | Insurance               |     12 |       29400 |
-| purchase      | Marketing               |     12 |       34000 |
-| purchase      | Occupancy               |     24 |      192774 |
-| purchase      | Repairs & Maintenance   |     46 |       17764 |
-| purchase      | Software                |     25 |        4309 |
-| purchase      | Utilities               |     96 |       96223 |
+| purchase      | Marketing               |     12 |       25000 |
+| purchase      | Occupancy               |     12 |      114774 |
+| purchase      | Repairs & Maintenance   |     27 |       11376 |
+| purchase      | Software                |     13 |        2329 |
+| purchase      | Utilities               |     48 |       56664 |
 | withdrawal    | Chargeback              |      2 |         383 |
-| withdrawal    | Debt Service            |     12 |       39000 |
-| withdrawal    | Internal                |      4 |      122000 |
-| withdrawal    | Labor                   |     52 |     1667612 |
-| withdrawal    | Owner Draw              |     12 |      120000 |
-| withdrawal    | Sales Tax               |     11 |      190807 |
+| withdrawal    | Debt Service            |     12 |       27000 |
+| withdrawal    | Internal                |      1 |       15000 |
+| withdrawal    | Labor                   |     26 |     1034157 |
+| withdrawal    | Owner Draw              |     12 |       60000 |
+| withdrawal    | Sales Tax               |     11 |      117954 |

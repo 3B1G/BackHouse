@@ -215,3 +215,24 @@ SALES_TAX_REMIT_DAY = 24               # monthly prepayment of prior month (simp
 PAYROLL_FIRST = date(2025, 10, 31)     # biweekly Fridays
 SWEEP_LOW, SWEEP_HIGH, SWEEP_TARGET = 20_000_00, 70_000_00, 45_000_00   # keep UNI inside this band
 RESERVE_DRAW = (date(2026, 1, 28), 15_000_00)
+
+# ---------------------------------------------------------------- active locations
+# One restaurant for now. Set ACTIVE_LOCATIONS = ["CHS", "UNI"] to rebuild the two-location group (v2 data).
+ACTIVE_LOCATIONS = ["CHS"]
+ALT_LOC = "UNI" if "UNI" in ACTIVE_LOCATIONS else "CHS"   # hosts planted items E2, E5, E7, D3, D6 and the 2nd chargeback
+SALARY_SHARE = {"CHS": 0.6, "UNI": 0.4}                   # shared salaries split across active locations
+if "UNI" not in ACTIVE_LOCATIONS:                         # one restaurant carries all group costs: scale them to its size
+    OPENING_BALANCE["CHS"] = 200_000_00
+    OWNER_DRAW["monthly"] = 5_000_00
+    LOAN.update(original=150_000_00, balance_at_start=120_000_00, monthly=2_250_00)
+LOCATIONS = {k: v for k, v in LOCATIONS.items() if k in ACTIVE_LOCATIONS}
+LEASES = {k: v for k, v in LEASES.items() if k in LOCATIONS}
+ACCOUNTS = {k: v for k, v in ACCOUNTS.items() if k in LOCATIONS or k == "RES"}
+OPENING_BALANCE = {k: OPENING_BALANCE[k] for k in ACCOUNTS}
+GEO["neighborhood"] = {k: v for k, v in GEO["neighborhood"].items() if k in LOCATIONS}
+GIFT_CARDS["per_day"] = {k: v for k, v in GIFT_CARDS["per_day"].items() if k in LOCATIONS}
+CHARGEBACKS = [(d, loc if loc in LOCATIONS else ALT_LOC, amt) for d, loc, amt in CHARGEBACKS]
+RECURRING = [(p, cat, {k: v for k, v in amts.items() if k in LOCATIONS}, day, var) for p, cat, amts, day, var in RECURRING]
+PERMITS = [p for p in PERMITS if p[1] in LOCATIONS]
+REPAIRS["big"] = (REPAIRS["big"][0], ALT_LOC, *REPAIRS["big"][2:])
+SALARY_SHARE = {k: SALARY_SHARE[k] / sum(SALARY_SHARE[j] for j in LOCATIONS) for k in LOCATIONS}
