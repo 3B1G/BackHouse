@@ -126,7 +126,9 @@ section("5. Ingredient prices", "![](ingredient_prices.png)\n\n" +
 cd["date"] = pd.to_datetime(cd.date)
 fig, ax = plt.subplots(figsize=(9, 3.4))
 ax.plot(cd.date, cd.balance_total / 100, color=INK, label="total")
-for a, col in zip(C.OPENING_BALANCE, [A, B, "grey"]):
+for a, col in {"CHS": A, "UNI": B, "RES": "grey"}.items():
+    if a not in C.OPENING_BALANCE:
+        continue
     ax.plot(cd.date, cd[f"balance_{a}"] / 100, color=col, lw=.9, label=a)
 ax.axvline(pd.Timestamp(C.TRAIN_END), ls="--", c="grey", lw=.8)
 ax.set_title("Bank balance, derived from opening + transactions ($)"); ax.legend(frameon=False, ncol=4)

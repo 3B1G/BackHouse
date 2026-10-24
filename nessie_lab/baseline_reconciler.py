@@ -56,7 +56,7 @@ for (loc, plat, wk), g in dl.groupby(["location", "channel", "wk"]):
     X(loc, nbd(wk + timedelta(8)), "in", s - round(s * 0.15), f"DLV-{loc}-{plat}-{wk}", f"{plat.upper()} PAYOUT WK {wk:%m%d}")
 plans = B["ap_payment_plans"]
 for r in plans.itertuples():
-    X("CHS" if "-CHS-" in r.invoice_no else "UNI", r.due, "out", r.amount, r.invoice_no, "ACH ")
+    X(r.invoice_no.split("-")[1], r.due, "out", r.amount, r.invoice_no, "ACH ")          # invoice_no = PREFIX-LOC-SEQ
 for r in B["invoices"][~B["invoices"].invoice_no.isin(plans.invoice_no)].itertuples():
     X(r.location, nbd(r.due_date), "out", r.total, r.invoice_no, f"ACH {r.supplier.upper()}")
 for r in B["credit_memos"].itertuples():

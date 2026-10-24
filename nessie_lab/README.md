@@ -1,7 +1,11 @@
 # nessie_lab: simulated restaurant data + Nessie pipeline
 
-Everything here is **SIMULATED**. "Demo Bistro Group" is a fictional two-location Italian trattoria in SF
-(Chestnut St / Marina, Union St / Cow Hollow). Suppliers, landlords, lender and delivery platforms are fictional.
+Everything here is **SIMULATED**. "Demo Bistro" is a fictional Italian trattoria on Chestnut St (Marina), SF.
+Suppliers, landlord, lender and delivery platforms are fictional.
+
+**One location for now.** `config.ACTIVE_LOCATIONS = ["CHS"]`. Setting it to `["CHS", "UNI"]` rebuilds the original
+two-location group (adds Union St / Cow Hollow, inter-account sweeps, group-sized owner draw and loan); that mode reproduces
+the earlier v2 data exactly. All numbers below are for the single location.
 Generated files (`data/*.db`, `data/*.csv`) and the answer key (`data/grader/`) are not in git: run the scripts below to rebuild them. Every run produces identical files.
 
 ## Why synthetic
@@ -12,9 +16,9 @@ Maven's "Pizza Place Sales" is fictitious and covers sales only. So we generate 
 | Metric (full months) | Ours | NRA 2024 full-service median |
 |---|---|---|
 | Food & beverage cost (COGS, purchases ± inventory) | ~32% | 32.0% |
-| Payroll + benefits, tips excluded | ~42% | 36.5% |
-| Occupancy (rent incl. NNN) | 6.9% | 6.0% |
-| Net cash margin | −3.8% | +2.8% pretax |
+| Payroll + benefits, tips excluded | ~42.5% | 36.5% |
+| Occupancy (rent incl. NNN) | 6.7% | 6.0% |
+| Net cash margin | −4.7% | +2.8% pretax |
 
 SF minimum wage $19.18 → $19.61 on 2026-07-01; 15% delivery commission cap; 8.625% sales tax.
 The restaurant is deliberately weaker than the median: it's slowly losing money.
@@ -32,7 +36,7 @@ python eda.py             # eda/report.md + charts
 python scenario_check.py  # does the data support the demo story?
 python baseline_reconciler.py && python grade.py data/flags_baseline.json   # rule-based Bookkeeper baseline + score
 python nessie_load.py dry-run                      # validate every payload, no network
-python nessie_load.py full --tag <tag>             # ~2,426 calls, ~4 min at 8 workers
+python nessie_load.py full --tag <tag>             # ~1,326 calls, ~2 min at 8 workers
 python nessie_sync.py --tag <tag>                  # pull back + verify round trip
 ```
 
@@ -84,15 +88,15 @@ Natural noise that should not be flagged: ±$5 cash over/short at the till, ±$1
 
 ## Stories already in the data
 
-- **Lobster Ravioli** ran a ~51% food cost (high for a signature dish) and earned ~$11.80 a plate until a lobster-meat shortage doubled the price on 2026-03-01. Since then food cost is ~93% and it earns $0–1.60 a plate after card and delivery fees, so it loses money once ~$3 of hand-made pasta prep labor is counted. ~350 plates a month.
+- **Lobster Ravioli** ran a ~51% food cost (high for a signature dish) and earned ~$12 a plate until a lobster-meat shortage doubled the price on 2026-03-01. Since then food cost is ~95% and it earns about $0 a plate after card and delivery fees, so it loses money once ~$3 of hand-made pasta prep labor is counted. ~190–230 plates a month.
 - **Margherita Pizza** is popular with low margin ("plowhorse"): a price-increase candidate. Competitor prices come from the Market scout.
 - **Three-payday months** (May 2026; Apr and Jul 2027 ahead) create cash dips. Forecast payroll from its biweekly calendar, never by replaying calendar months.
-- `scenario_check.py` (deterministic, daily; payroll, sales tax and rent on their own calendars). Cash $232,932 on 2026-10-24. Reaches $0 on **2027-08-06** (base),
-  **2027-05-14** with a $4,800 fridge repair plus a January with 15% fewer covers, and back to **2027-08-06** with fixes (reprice two dishes, fix the ravioli,
-  recover the card fee). Below "one payroll + rent" ($82k) from Feb–Mar 2027. Note the bank window holds only 11 sales-tax payments (both October payments
+- `scenario_check.py` (deterministic, daily; payroll, sales tax and rent on their own calendars). Cash $157,631 on 2026-10-24. Reaches $0 on **2027-08-06** (base),
+  **2027-07-09** with a $4,800 fridge repair plus a January with 15% fewer covers, and back to **2027-08-06** with fixes (reprice two dishes, fix the ravioli,
+  recover the card fee). Below "one payroll + rent" ($50k) from Mar–Apr 2027. Note the bank window holds only 11 sales-tax payments (both October payments
   fall just outside it), so replaying history naively overstates runway.
   The Forecaster's Monte Carlo should replace this.
-- Backtest caveat: August and September never appear in the training window, so their seasonality can't be learned. Seasonal regressions score ~11–14% daily MAPE on the test months; same-day-last-week ~15–18%.
+- Backtest caveat: August and September never appear in the training window, so their seasonality can't be learned. On the two-location data, seasonal regressions scored ~11–14% daily MAPE on the test months and same-day-last-week ~15–18% (not yet re-measured for one location).
   Use `feat_supplier_train` / `feat_recurring_train` (built only from data ≤ 2026-07-24) when backtesting. In `feat_daily_sales`, covers, tickets, hours,
   avg_check and discounts are same-day outcomes: use them as targets, not as predictors for that day.
 
@@ -112,6 +116,7 @@ Natural noise that should not be flagged: ±$5 cash over/short at the till, ±$1
 | No Nessie bill exists for payroll or sales tax | The Forecaster infers both from withdrawals (`BAYPAY PAYROLL`, `CDTFA`) and `sales_tax_returns` |
 
 Bank ids are derived from row content (deterministic). Nessie tag `sample1` predates that and is stale; `sample2` is current.
+Tag `boh-dev` (and its manifest) holds the **two-location** data. Load the single-location data under a new tag, e.g. `boh-1loc`.
 
 Amounts are **integer cents everywhere**, including bills, loan and account balances (the account nickname says so).
 Each transaction description ends with `|ref=<bank_id>` for round-trip matching only. Agents must not use it to detect errors.
