@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.tmp
+# answer key: graders only, never in git
+data/grader/
+# generated: rebuild with python generate.py / features.py / baseline_reconciler.py
+*.db
+data/*.csv
+data/flags_*.json
+# stale Nessie samples (only boh-dev is current)
+data/nessie_manifest_sample*.json
