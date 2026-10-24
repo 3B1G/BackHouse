@@ -9,9 +9,11 @@ Flow:
   every step --AuditEntry--> audit.py (append-only)
 
 Rule
-  Adjustments reach the Forecaster only from findings that passed checks.py, and code passes them along
-  (passed_adjustments). The Controller (AI) never writes or edits an adjustment or a money figure: it refers to
-  findings and forecasts by id, and every number it shows comes from a Finding or a ForecastResult.
+  Adjustments reach the Forecaster only from findings checks.py passed, and code passes them along
+  (passed_adjustments). A finding downgraded to the owner still passes the adjustments that make the forecast more
+  cautious (money owed, an overcharge that keeps costing), never ones that make it rosier, until the owner answers.
+  The Controller (AI) never writes or edits an adjustment or a money figure: it refers to findings and forecasts by
+  id, and every number it shows comes from a Finding or a ForecastResult.
 
 Conventions
   money   integer cents; field names end in _cents (except SuspiciousItem, which mirrors the reconciler's JSON)
@@ -209,6 +211,7 @@ class VsBase(Contract):
     days_moved_best: int | None = None
     days_moved_average: float | None = None
     cash_change_cents: int | None = None                  # cash difference on the base case's likely run-out day
+    floor_days_moved_likely: int | None = None            # how far the likely "below payroll + rent" date moved
 
 
 class ForecastResult(Contract):
@@ -352,10 +355,21 @@ def findings_to_flags(findings):
     return flags
 
 
+CAUTIOUS = {"unpaid_bill", "ongoing_overcharge"}         # adjustments that can only make the forecast more careful
+
+
 def passed_adjustments(adjustments, checks):
-    """The rule in code: only adjustments whose finding passed checks.py reach the Forecaster."""
-    passed = {c.ref for c in checks if c.subject == "bookkeeper" and c.status == "pass"}
-    return [a for a in adjustments if a.finding_id in passed]
+    """The rule in code. Findings checks.py passed: all their adjustments. Findings downgraded to the owner: only the
+    cautious ones (money owed, an overcharge that keeps costing), never counted as recoverable until the owner
+    confirms. Rejected or unchecked findings: nothing."""
+    status = {c.ref: c.status for c in checks if c.subject == "bookkeeper"}
+    out = []
+    for a in adjustments:
+        if status.get(a.finding_id) == "pass":
+            out.append(a)
+        elif status.get(a.finding_id) == "downgrade" and a.kind in CAUTIOUS:
+            out.append(a.model_copy(update={"recoverable": False}))
+    return out
 
 
 BK_ISSUE = {"duplicate_charge": "duplicate_charge", "supplier_overcharge": "overcharge", "commission_overcharge": "commission_overcharge",
@@ -363,10 +377,25 @@ BK_ISSUE = {"duplicate_charge": "duplicate_charge", "supplier_overcharge": "over
             "missed_payment": "missed_payment"}
 
 
+def _first_sentence(text, limit=160):
+    """'TableTap charged 2.9%, not 2.6%, since Aug 1. More...' -> the first sentence; decimals like $349.00 stay whole."""
+    s = re.split(r"(?<=[.!?])\s+", (text or "").strip(), maxsplit=1)[0]
+    return s if len(s) <= limit else s[:limit - 3].rstrip() + "..."
+
+
+def _why(e):
+    errors = e.errors() if hasattr(e, "errors") else None          # pydantic: name the field and the rule broken
+    if errors:
+        loc = ".".join(map(str, errors[0]["loc"]))
+        return f"{loc}: {errors[0]['msg']}" if loc else errors[0]["msg"]
+    return f"{type(e).__name__}: {e}"
+
+
 def from_bk_report(report, id_map=None):
     """A report from the bk Bookkeeper (schema 1.1: a dict, JSON text or a file path) -> (findings, adjustments, rejected).
     Nessie ids become bank_ids through id_map ({nessie_id: bank_id}, from bookkeeper_tools.bank_id_map()).
-    `rejected` maps the ids of findings that could not be converted to the reason: treat them like failed checks.
+    `rejected` maps finding ids to what was dropped and why: "finding: ..." (not converted; treat it like a failed
+    check) or "adjustment: ..." (the finding is kept for the owner, but it doesn't change the forecast).
     Unverified: run checks.py on the findings, then hand passed_adjustments() to the Forecaster."""
     if isinstance(report, Path) or (isinstance(report, str) and not report.lstrip().startswith("{")):
         report = Path(report).read_text()
@@ -381,37 +410,43 @@ def from_bk_report(report, id_map=None):
             return id_map[x]
         raise ValueError(f"bank reference {x} is neither a bank_id nor a known Nessie id")
 
+    def treatment(fid, raw):
+        t, recoverable = raw["treatment"], raw.get("recoverable") is True
+        if t["kind"] == "exclude":
+            return [Adjustment(kind="exclude_row", finding_id=fid, bank_id=bank_id(b)) for b in t["bank_ids"]]
+        if t["kind"] == "correct_to":
+            return [Adjustment(kind="correct_row", finding_id=fid, bank_id=bank_id(t["bank_id"]), correct_amount_cents=t["cents"])]
+        if t["kind"] == "ongoing":
+            return [Adjustment(kind="ongoing_overcharge", finding_id=fid, since=t["since"], monthly_cents=t["monthly_cents"],
+                               recoverable=recoverable)]
+        if t["kind"] == "owed":
+            return [Adjustment(kind="unpaid_bill", finding_id=fid, cost_id=(raw.get("books_refs") or [None])[0],
+                               amount_cents=t["cents"], due_date=t["due"])]
+        raise ValueError(f"unknown treatment {t['kind']!r}")
+
     findings, adjustments, rejected = [], [], {}
     for raw in report.get("findings", []):
         fid = str(raw.get("id"))
         try:
-            t, recoverable = raw["treatment"], raw.get("recoverable") is True
+            t = raw.get("treatment") or {}
             f = Finding(finding_id=fid, issue_type=BK_ISSUE.get(raw["root_cause"], "other"), verdict=raw["verdict"],
-                        root_cause=f"{raw['root_cause'].replace('_', ' ')}: {raw.get('counterparty') or 'unknown payee'}",
+                        root_cause=_first_sentence(raw.get("explanation"))
+                        or f"{raw['root_cause'].replace('_', ' ')}: {raw.get('counterparty') or 'unknown payee'}",
                         counterparty=raw.get("counterparty"), first_date=(raw.get("dates") or {}).get("first"),
                         last_date=(raw.get("dates") or {}).get("last"), bank_ids=[bank_id(b) for b in raw.get("bank_ids", [])],
                         books_refs=raw.get("books_refs", []), amount_at_issue_cents=abs(raw["amounts"]["impact_cents"]),
-                        monthly_impact_cents=t.get("monthly_cents") if t["kind"] == "ongoing" else None,
+                        monthly_impact_cents=t.get("monthly_cents") if t.get("kind") == "ongoing" else None,
                         evidence=[Evidence(type=e["type"], ref=id_map.get(e["ref"], e["ref"])) for e in raw.get("evidence", [])],
                         explanation=raw["explanation"], suggested_action=raw.get("suggested_action"),
                         assumption_if_unconfirmed=raw.get("assumption_if_unconfirmed"), confidence=raw["confidence"])
-            if t["kind"] == "exclude":
-                adj = [Adjustment(kind="exclude_row", finding_id=fid, bank_id=bank_id(b)) for b in t["bank_ids"]]
-            elif t["kind"] == "correct_to":
-                adj = [Adjustment(kind="correct_row", finding_id=fid, bank_id=bank_id(t["bank_id"]), correct_amount_cents=t["cents"])]
-            elif t["kind"] == "ongoing":
-                adj = [Adjustment(kind="ongoing_overcharge", finding_id=fid, since=t["since"], monthly_cents=t["monthly_cents"],
-                                  recoverable=recoverable)]
-            elif t["kind"] == "owed":
-                adj = [Adjustment(kind="unpaid_bill", finding_id=fid, cost_id=(raw.get("books_refs") or [None])[0],
-                                  amount_cents=t["cents"], due_date=t["due"])]
-            else:
-                raise ValueError(f"unknown treatment {t['kind']!r}")
         except (KeyError, TypeError, ValueError) as e:        # pydantic's ValidationError is a ValueError
-            rejected[fid] = f"{type(e).__name__}: {str(e).splitlines()[0]}"
+            rejected[fid] = f"finding: {_why(e)}"
             continue
         findings.append(f)
-        adjustments += adj
+        try:
+            adjustments += treatment(fid, raw)
+        except (KeyError, TypeError, ValueError) as e:        # keep the finding for the owner; it just doesn't move the forecast
+            rejected[fid] = f"adjustment: {_why(e)}"
     return findings, adjustments, rejected
 
 
@@ -434,7 +469,8 @@ if __name__ == "__main__":
                        safety_floor_cents=5_000_000, below_floor_likely=date(2027, 2, 1), trials=1000, horizon_months=24, seed=13,
                        assumptions=["5% of a dish's orders lost per price rise"],
                        monthly_bands=[MonthBand(month="2026-11", worst_cents=9_000_000, likely_cents=9_500_000, best_cents=9_900_000)],
-                       vs_base=VsBase(base_forecast_id="fc-0", days_moved_likely=-28, cash_change_cents=-480_000))
+                       vs_base=VsBase(base_forecast_id="fc-0", days_moved_likely=-28, cash_change_cents=-480_000,
+                                      floor_days_moved_likely=-21))
     s = Suggestion(suggestion_id="S1", action="reprice_item", title="Raise Example Dish from $18 to $20", target="Example Dish",
                    new_price_cents=2000, monthly_cash_effect_cents=60000, assumptions=["5% fewer orders at the new price"],
                    based_on=["F1", "fc-1"])
@@ -442,21 +478,29 @@ if __name__ == "__main__":
                   cover_change={"2027-01": -0.15}, price_response={"Example Dish": 0.3}, fix_findings=["F2"])
     for obj in (f, *adj, r, s, sc, ForecastSettings(as_of=date(2026, 7, 24))):
         assert type(obj).model_validate_json(obj.model_dump_json()) == obj
-    checks = [CheckResult(subject="bookkeeper", ref="F1", status="pass"), CheckResult(subject="bookkeeper", ref="F2", status="reject")]
-    print("examples round-trip through JSON; flags:", findings_to_flags([f]), "| passed adjustments:",
-          [a.kind for a in passed_adjustments(adj, checks)])
-    bk = {"findings": [{"id": "B1", "root_cause": "card_fee_creep", "verdict": "error", "confidence": 0.9, "counterparty": "Example Processor",
-                        "dates": {"first": "2026-08-01", "last": "2026-10-23"}, "bank_ids": ["nessie-abc"], "books_refs": [],
-                        "amounts": {"impact_cents": 1200, "expected_rate": 0.026, "actual_rate": 0.029},
-                        "explanation": "Fee rate went up.", "evidence": [{"type": "bank_row", "ref": "nessie-abc"}],
-                        "treatment": {"kind": "ongoing", "since": "2026-08-01", "monthly_cents": 30000}, "recoverable": True,
-                        "suggested_action": "dispute the rate"},
-                       {"id": "B2", "root_cause": "duplicate_charge", "verdict": "error", "confidence": 0.9, "counterparty": "X",
-                        "dates": {"first": "2026-04-13", "last": "2026-04-13"}, "bank_ids": ["nessie-unknown"], "books_refs": [],
-                        "amounts": {"impact_cents": 100}, "explanation": "x", "evidence": [{"type": "bank_row", "ref": "x"}],
-                        "treatment": {"kind": "exclude", "bank_ids": ["nessie-unknown"]}, "recoverable": True, "suggested_action": "x"}]}
-    fs, ads, bad_ids = from_bk_report(bk, {"nessie-abc": "T0A1B2C3D4"})
-    print("bk report ->", [(x.finding_id, x.issue_type, x.bank_ids) for x in fs], [a.kind for a in ads], "| rejected:", bad_ids)
+    print("examples round-trip through JSON; flags:", findings_to_flags([f]))
+    adj.append(Adjustment(kind="exclude_row", finding_id="F2", bank_id="T0A1B2C3D4"))
+    checks = [CheckResult(subject="bookkeeper", ref="F1", status="pass"), CheckResult(subject="bookkeeper", ref="F2", status="downgrade")]
+    passed = [(a.finding_id, a.kind, a.recoverable) for a in passed_adjustments(adj, checks)]
+    assert passed == [("F1", "correct_row", False), ("F2", "ongoing_overcharge", False)], passed
+    print("passed adjustments (F1 passed; F2 downgraded keeps only the cautious one, not recoverable):", passed)
+
+    def bk_row(i, cause, ids, treat, **kw):
+        return {"id": i, "root_cause": cause, "verdict": "error", "confidence": 0.9, "counterparty": "X", "bank_ids": ids,
+                "dates": {"first": "2026-08-01", "last": "2026-10-23"}, "books_refs": [], "amounts": {"impact_cents": 34900},
+                "explanation": "Example Processor charged 2.9% instead of 2.6%, costing $349.00 so far. More detail.",
+                "evidence": [{"type": "bank_row", "ref": "nessie-abc"}], "treatment": treat, "recoverable": True,
+                "suggested_action": "x", **kw}
+    owed = {"kind": "owed", "cents": 127662, "due": "2026-09-26"}
+    bk = {"findings": [bk_row("B1", "card_fee_creep", ["nessie-abc"], {"kind": "ongoing", "since": "2026-08-01", "monthly_cents": 30000}),
+                       bk_row("B2", "duplicate_charge", ["nessie-unknown"], {"kind": "exclude", "bank_ids": ["nessie-unknown"]}),
+                       bk_row("B3", "missed_payment", [], owed, books_refs=["XYZ-CHS-00002"]),
+                       bk_row("B4", "missed_payment", ["nessie-abc"], owed)]}          # owed, but no document id
+    fs, ads, dropped = from_bk_report(bk, {"nessie-abc": "T0A1B2C3D4"})
+    assert [x.finding_id for x in fs] == ["B1", "B3", "B4"] and [a.finding_id for a in ads] == ["B1", "B3"], (fs, ads)
+    assert fs[0].root_cause.endswith("costing $349.00 so far.") and set(dropped) == {"B2", "B4"}, (fs[0].root_cause, dropped)
+    print("bk report ->", [(x.finding_id, x.issue_type) for x in fs], "| root_cause:", repr(fs[0].root_cause))
+    print("  dropped:", dropped)
     bad = [lambda: Finding(**{**f.model_dump(), "bank_ids": ["349.00"]}),
            lambda: Adjustment(kind="correct_row", finding_id="F3", bank_id="T0A1B2C3D4"),
            lambda: Adjustment(kind="ongoing_overcharge", finding_id="F3", monthly_cents=100),
