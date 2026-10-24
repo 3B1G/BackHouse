@@ -1,6 +1,6 @@
 # Bookkeeper
 
-An ASI-powered uAgent that investigates restaurant records through two simulated read-only tools and saves an **unverified** JSON report. It returns the filename to the requesting orchestrator. It does not refresh Nessie, modify the books, run a verifier, or run Monte Carlo.
+An ASI-powered uAgent that investigates restaurant records through 11 read-only domain tools over local snapshots and saves an **unverified** JSON report. It returns the filename to the requesting orchestrator. It does not refresh Nessie, modify the books, run a verifier, or run Monte Carlo.
 
 ## Setup
 
@@ -74,45 +74,86 @@ Send a `ChatMessage` with one `TextContent` containing:
 
 `as_of` and `nessie_tag` are optional. The handler acknowledges the incoming message ID, retains the session context, and sends the same result shape as the CLI, followed by `EndSessionContent`. Invalid requests and failed runs receive `status: "error"` and no filename. Requests are serialized in one service process; multiple server processes sharing the output directory are not supported.
 
-The ASI model uses `https://api.asi1.ai/v1/chat/completions`. A run allows up to 40 model turns: at most 39 for investigation, with the last reserved for writing the report with tools disabled. The model is warned as its query budget runs low and must disclose any remaining coverage gaps. These are ordinary tool interactions, not verifier iterations. No report revision/retry loop runs after a final draft. API failures, tool calls during finalization, or malformed final JSON fail the run. The server logs the current turn and report-writing phase. Failed runs retain a trace with an error message when source loading succeeded; the client receives a safe diagnostic and trace ID.
+The ASI model uses `https://api.asi1.ai/v1/chat/completions`.
+
+### Batched investigation
+
+A run is a set of small, independent investigations ("batches"), never one long conversation, so no model call carries every area's evidence. Batches run in parallel, `BOOKKEEPER_CONCURRENCY` at a time (default 4; lower it if ASI returns HTTP 429). Each batch starts a fresh conversation with its own brief, its date window, a subset of the 11 tools, and a compact bank memo index for its area (memo pattern, count, dates and total; at most 60 lines). The plan (`batches.py`):
+
+| Batches | Window | Turn cap |
+|---|---|---|
+| Card settlements, cash deposits, delivery payouts | whole window, exceptions only | 6 each |
+| One per supplier (from `suppliers`) | whole window | 10 |
+| Recurring obligations (rent, loan, payroll, vendor bills, sales tax, draws, repairs, permits, transfers) | whole window | 12 |
+| Charges with no supporting document | whole window | 10 |
+
+With the current snapshot that is 10 batches and, typically, about 20 model calls; on the scripted end-to-end run the largest single call was about 43k characters. When a batch is finished the model replies with its result directly (a Markdown code fence around the JSON is accepted). If it replies with anything else, is cut off at the output limit, or reaches its last turn, tools are disabled and it is asked for the result. Each batch returns a `BatchResult` (findings, cleared, coverage, limitations). Patterns are reported with at most 20 representative `bank_ids`; `exclude`/`correct_to` treatments still list every erroneous row.
+
+Code then assembles the report: findings with the same root cause and counterparty that are close in time or share bank rows are merged (the same duplicate seen by a supplier batch and the unrecorded-charges batch becomes one finding), conflicting treatments of the same bank rows keep the more confident finding and are noted, cleared items overlapping a finding are dropped, and the summary and coverage are computed. A batch whose result is invalid, cut off or written while asking for tools is listed under limitations as "Not reviewed: …" and the run continues; the run fails if no batch produced a result or if the run as a whole lacks successful bank and books evidence. An API or network failure in one batch fails the run, but only after the other batches finish, so their results are kept in the trace for resume.
+
+Each response may make at most 20 tool calls; any calls beyond that, or calls to a tool outside the batch's subset, are answered with a "not run" error (and do not count as evidence). Output limits are `ASI_MAX_TOKENS` (investigation turns, default 12000) and `ASI_REPORT_MAX_TOKENS` (result writing, default 32000). These are ordinary tool interactions, not verifier iterations; no result is revised once written. The server logs each batch's turns. The trace (`format: "batched/1"`) records the plan, each batch's conversation, result or reason, the token `usage` of every call, and the assembly. Failed runs retain a trace with an error message when source loading succeeded; the client receives a safe diagnostic and trace ID.
 
 Investigation API calls have a 120-second read timeout. Final report writing has a
 600-second read timeout, configurable with `ASI_READ_TIMEOUT_SECONDS` and
 `ASI_REPORT_TIMEOUT_SECONDS` respectively. These are per-read network timeouts,
 not a whole-run deadline. A slow final response can take several minutes.
 
-If the final writing call fails with a transport error, resume it without repeating
+If batches' result-writing calls fail with a transport error, resume them without repeating
 the investigation:
 
 ```bash
 uv run --project bookkeeper bookkeeper resume --trace-id TR-<failed-trace-id>
 ```
 
-This makes one writing call with tools disabled, using the saved messages,
-evidence, dates, and cash balances. It does not query changed source files or run
-a verifier. The original failed trace remains unchanged; the new trace references
+This makes one writing call, with tools disabled, for each batch that failed at that step,
+using its saved messages, then assembles the report from the saved batch results, dates
+and cash balances. Batches that failed during investigation are listed as not reviewed,
+because resume never reopens the databases or runs a tool. It does not run a verifier. The original failed trace remains unchanged; the new trace references
 it through `resumed_from`. The CLI prints the saved report filename. Repeating the
 resume command returns that same report once it succeeds. Recovery is keyed by
 the trace ID, separately from the agent's sender/request pair: rerunning the old
 client request would start another investigation, so use the returned filename.
 Investigation failures and completed but malformed drafts cannot be resumed by
-this command; no automatic report-revision or retry loop is added.
+this command; no automatic report-revision or retry loop is added. Traces written
+before batching (one conversation, including the older `query_nessie`/`query_books`
+traces) still resume through their original path, and previously saved reports and
+receipts are still returned as-is.
 
-## Tool replacement interface
+## Investigation tools
 
-Only `query_nessie` and `query_books` are exposed to the model. Both accept:
+The model gets 11 read-only function tools (`asi_tool_definitions()` in `bookkeeper_tools.py`), in two groups:
 
-```json
-{"operation":"query","sql":"SELECT * FROM invoices ORDER BY invoice_no","offset":0,"limit":200}
-```
+| Group | Tools |
+|---|---|
+| bank (Nessie snapshot) | `search_bank_transactions`, `get_bank_transaction`, `get_payee_history`, `get_account_balances`, `get_bank_bills` |
+| books (`books.db`) | `search_costs`, `get_cost`, `get_agreements`, `get_card_batches`, `get_cash_deposit_slips`, `get_delivery_payouts` |
 
-For schema discovery, use `operation: "schema"`, `sql: null`, `offset: 0`, and `limit: 200`. Query results contain `rows`, `truncated`, `next_offset`, and `as_of`. Limit is 1–200; use stable `ORDER BY` when paging. Aggregates are allowed. Queries have a three-second execution budget and 120 KB result cap.
+A report needs at least one successful result from each group; error and `unavailable` results do not count, and the model need not call every tool. Arguments are validated against the schema before a tool runs; problems come back as `{"error": ...}` for the model to correct.
 
-`DataTool.call()` in `tools.py` is the adapter contract. The current `SnapshotTools` owns two private SQLite copies. To integrate production tools, supply an equivalent snapshot provider to `Bookkeeper(..., snapshots=...)` exposing `tools`, source paths, cutoff, start, bank rows, limitations, `balances()` and `close()`. Keep the two model-facing schemas unchanged. All model data access must pass through these adapters.
+Every response carries `cutoff` and the `limitations` that apply to it, and is capped at 120 KB. Primary lists (`search_bank_transactions`, `search_costs`, `get_card_batches`, `get_cash_deposit_slips`, `get_delivery_payouts`) take `limit` (at most 50) and `offset` and return `total_matches`, `returned`, `truncated` and `next_offset`, in a stable order; totals and sums cover every match, not just the page. Supplementary lists (same-amount rows, memo groups, chargebacks, line items, earlier costs) are capped and report `<name>_total` and `<name>_truncated`.
 
-Adapters filter source records at the cutoff before SQL runs, restrict tables, remove synthetic bank IDs and `|ref=` markers, and deny writes/attachments. Parent/child documents are filtered together. Model `bank_ids` refer to native `nessie_id` values. Static contracts and recipes lack version history; historical validity is explicitly assumed. Snapshot-only bills, open AP and deposits-in-transit are omitted. Future tax payment dates and dispute outcomes are hidden. Invoice status comparison remains future work; the current database has no historical invoice state.
+Money is integer cents except `unit_price_dollars`; `*_pct` fields are percents. Model-facing `bank_id` values are native Nessie ids.
 
-Most monetary values use integer cents; `invoice_lines.unit_price` uses dollars per unit. Cash is calculated in code using opening balances plus completed deposits minus completed purchases/withdrawals. Internal transfers affect each account but cancel in the combined balance. Pending transactions and proposed corrections/refunds do not change cash.
+**Settlement matching.** `get_card_batches`, `get_cash_deposit_slips` and `get_delivery_payouts` match every book row to its bank deposit in code, one-to-one and only against bank rows on or before the cutoff: card batches to the `<PROCESSOR> DEP MMDD` deposit for the batch date (within 10 days), platform weeks to `<PLATFORM> PAYOUT WK MMDD` (within 20 days of the week start), and cash slips to one `BRANCH DEPOSIT` on the slip date (same-day pairs first, then up to 3 business days, closest amount). Rows gain `bank_ids`, `bank_date`, `deposit_cents`, `difference_cents` (deposit minus expected) and `match_status`: `matched` (within `tolerance_cents`: 10 for cards and payouts, 0 for cash), `amount_mismatch`, `missing` (due by the cutoff, no deposit), `not_yet_due` or `multiple`. Responses add `match_counts`, `difference_total_cents` and `unmatched_deposits` (deposits of that kind no row accounts for). `exceptions_only=true` returns only rows that do not reconcile, which is how the settlement batches work.
+
+### Historical cutoff
+
+`ToolSession(root, tag, cutoff)` loads both databases read-only once per request and freezes them in memory: source changes during a run are not seen, and the next run sees them. Documents are filtered at the cutoff before anything is computed, and parent/child documents are filtered together. The Book (costs, line items, descriptions, credits, related records) is rebuilt from the filtered documents by `book_projection.py`.
+
+- **Payment status.** A cost is `paid` only when a record dated on or before the cutoff shows the payment: payroll runs, owner draws, sales-tax paid dates, recorded invoice payments (when an `invoice_payments` table exists) and chargeback debits. Otherwise it is `pending` (recorded payments fall short), `scheduled` (a lease or loan obligation due after the cutoff) or `unknown`. Autopay assumptions and current open AP are never used. A status-filtered `search_costs` reports `omitted_unknown_status`.
+- **Bank bills.** Nessie's bills are current state with no dated snapshot, so `get_bank_bills` returns `status: "unavailable"`.
+- **Snapshot-only state.** Open AP and deposits in transit, including cash not yet deposited, are omitted.
+- **Future facts.** Dispute outcomes, debit dates and tax payment dates after the cutoff are hidden. Contractual due dates and installment plans stay. `expected_settlement_date` and `expected_payout_date` are estimates from the agreements, and `expected_after_cutoff` marks those not yet due.
+- **Delivery weeks.** POS tickets are cut off before weekly aggregation; weeks with `complete_week: false` are partial.
+- **Reference data.** Agreements, supplier terms, leases, loans and recipes have no version history, so their validity at the cutoff is assumed.
+
+Cash is calculated by one function shared by the report and `get_account_balances`: opening balances plus completed deposits minus completed purchases and withdrawals, from each account's opening date through `as_of`. Internal transfers affect each account but cancel in the combined balance. Pending transactions and proposed corrections or refunds do not change cash. `get_account_balances` rejects dates after the cutoff or before the opening balances.
+
+Traces record `toolset` (version and groups) and `sources` (snapshot paths, bank rows, cutoff, window start), which resume reuses without reopening the databases.
+
+To swap in production data sources, pass a snapshot provider to `Bookkeeper(..., snapshots=...)` that exposes `call(name, arguments)`, source paths, `as_of`, `start`, `bank_rows`, `limitations`, `balances()` and `close()`, and keep the 11 model-facing schemas unchanged. This version still reads only the local snapshots; it adds no live API access or verification.
+
+The standalone `nessie_lab/bookkeeper_tools.py` is a compatibility wrapper around the same implementation in legacy mode: synthetic `T…` bank ids, the Book's own statuses, no cutoff, Claude-format `TOOLS` and `ToolSession(max_calls=8)`. That mode is never used by Bookkeeper.
 
 ## Report contract and verification
 
@@ -130,4 +171,4 @@ uv run --project bookkeeper bookkeeper export-flags \
 
 The offline export translates native Nessie IDs to the grading IDs already in the sync snapshot. It never reads the answer key. For `exclude`/`correct_to` findings it exports treatment-target IDs rather than every evidence row, so a legitimate original payment is not flagged alongside its duplicate. Run `grade.py` separately if desired; grading is not part of the agent's generation process.
 
-Tests use a scripted model and small fixtures, plus optional read-only checks on local generated databases. A live model run requires an ASI API key and incurs API usage.
+Tests use a scripted model and small deterministic fixtures, plus optional read-only checks on local generated databases. A live model run requires an ASI API key and incurs API usage.

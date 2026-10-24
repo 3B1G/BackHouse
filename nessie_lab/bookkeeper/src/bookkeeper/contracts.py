@@ -139,6 +139,14 @@ class Draft(Contract):
     limitations: list[str]
 
 
+class BatchResult(Contract):
+    """One batch's part of the investigation; code assembles the report's Draft from these."""
+    coverage: Coverage
+    findings: list[Finding]
+    cleared: list[Cleared]
+    limitations: list[str]
+
+
 class AccountBalance(Contract):
     account: str
     opening_as_of: date

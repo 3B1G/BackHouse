@@ -1,0 +1,130 @@
+import json
+
+from bookkeeper.batches import MEMO_INDEX_ROWS, Batch, assemble_draft, memo_index, opening_messages, plan_batches
+from bookkeeper.bookkeeper_tools import ToolSession
+from bookkeeper.contracts import BatchResult
+from conftest import CUTOFF
+
+
+def test_plan_areas_tools_and_windows(root):
+    s = ToolSession(root, "boh-1loc", CUTOFF)
+    plan = plan_batches(s)
+    assert [b.id for b in plan] == ["card_settlements", "cash_deposits", "delivery_payouts", "supplier:Supplier",
+                                    "recurring_obligations", "unrecorded_charges"]
+    by = {b.id: b for b in plan}
+    assert all((b.date_from, b.date_to) == ("2026-01-01", CUTOFF) for b in plan)          # every batch spans the window
+    assert "get_card_batches" in by["card_settlements"].tools and "search_costs" not in by["card_settlements"].tools
+    assert "get_account_balances" in by["recurring_obligations"].tools
+    assert [b.max_turns for b in plan] == [6, 6, 6, 10, 12, 10]
+
+
+def test_memo_index_is_area_scoped_and_capped(root):
+    s = ToolSession(root, "boh-1loc", CUTOFF)
+    by = {b.id: b for b in plan_batches(s)}
+    card, _ = memo_index(s, by["card_settlements"])
+    assert [g["memo_pattern"] for g in card] == ["TABLETAP PAYMENTS DEP ##"] and card[0]["count"] == 60
+    supplier, _ = memo_index(s, by["supplier:Supplier"])
+    assert {g["memo_pattern"] for g in supplier} == {"ACH SUPPLIER"} and supplier[0]["count"] == 3     # "pre" is before the window, n8 after the cutoff
+    outflows, total = memo_index(s, by["unrecorded_charges"])
+    assert all(g["nessie_type"] != "deposit" for g in outflows) and total == len(outflows)
+    wide = Batch("x", "x", "2026-01-01", CUTOFF, "", (), 1, ("",))
+    s.bank = s.bank.assign(memo=[f"MEMO {chr(65 + i % 26)}{chr(65 + i // 26)}" for i in range(len(s.bank))],
+                           nessie_type="purchase")
+    index, total = memo_index(s, wide)
+    assert len(index) == MEMO_INDEX_ROWS and total > MEMO_INDEX_ROWS
+
+
+def test_opening_messages_are_small_and_self_contained(root):
+    s = ToolSession(root, "boh-1loc", CUTOFF)
+    batch = next(b for b in plan_batches(s) if b.id == "supplier:Supplier")
+    system, user = opening_messages(batch, s, {"total_cents": 1}, s.limitations)
+    assert "\nBatch: supplier:Supplier\n" in system["content"] and "BatchResult schema" in system["content"]
+    context = json.loads(user["content"])
+    assert context["window"] == {"from": "2026-01-01", "to": CUTOFF} and "balances" not in context
+    assert len(system["content"]) + len(user["content"]) < 15000
+
+
+# ---------------------------------------------------------------- assembly
+def finding(id, root_cause="card_fee_creep", counterparty="TableTap Payments", first="2026-08-01", last="2026-08-31",
+            bank_ids=("a",), impact=100, kind="ongoing", confidence=0.9, verdict="error", recoverable=True, **treatment):
+    t = {"ongoing": dict(kind="ongoing", since=first, monthly_cents=impact), "exclude": dict(kind="exclude", bank_ids=list(bank_ids)),
+         "correct_to": dict(kind="correct_to", bank_id=bank_ids[0], cents=1), "owed": dict(kind="owed", cents=impact, due=last)}[kind]
+    t.update(treatment)
+    return dict(id=id, root_cause=root_cause, verdict=verdict, confidence=confidence, counterparty=counterparty,
+                dates=dict(first=first, last=last), bank_ids=list(bank_ids), books_refs=[], amounts=dict(impact_cents=impact),
+                explanation=f"{id}.", evidence=[dict(type="bank_row", ref=bank_ids[0])], treatment=t, recoverable=recoverable,
+                suggested_action="Ask.", assumption_if_unconfirmed=None)
+
+
+def result(*findings, cleared=(), reviewed=10, limitations=()):
+    return BatchResult.model_validate(dict(coverage=dict(bank_rows_reviewed=reviewed, matched_to_documents=reviewed, investigated=1,
+                                                         cleared_as_ok=len(cleared)),
+                                           findings=list(findings), cleared=list(cleared), limitations=list(limitations)))
+
+
+def b(id, title=None):
+    return Batch(id, title or id, "2026-01-01", "2026-12-31", "", (), 1)
+
+
+def test_cross_quarter_pattern_merges_into_one_finding():
+    q3 = result(finding("Q3-1", first="2026-07-01", last="2026-07-24", bank_ids=("a", "b"), impact=300,
+                        **{"monthly_cents": 300}))
+    q4 = result(finding("Q4-1", first="2026-07-27", last="2026-10-22", bank_ids=("c",), impact=900, confidence=0.7,
+                        **{"monthly_cents": 450}))
+    draft, info = assemble_draft([(b("card:Q3"), q3), (b("card:Q4"), q4)], [], bank_rows=1000)
+    [f] = draft.findings
+    assert f.id == "F1" and f.bank_ids == ["a", "b", "c"] and f.amounts.impact_cents == 1200 and f.confidence == 0.7
+    assert (str(f.dates.first), str(f.dates.last)) == ("2026-07-01", "2026-10-22")
+    assert f.treatment.kind == "ongoing" and str(f.treatment.since) == "2026-07-01" and f.treatment.monthly_cents == 450
+    assert draft.summary.ongoing_monthly_cents == 450 and info["merged"] == [["Q3-1", "Q4-1", "card:Q4"]]
+
+
+def test_distant_or_different_findings_stay_separate():
+    far = [finding("A", first="2026-01-01", last="2026-01-31"), finding("B", first="2026-06-01", last="2026-06-30", bank_ids=("z",))]
+    other = finding("C", root_cause="commission_overcharge", counterparty="RapidPlate", bank_ids=("y",))
+    corrections = [finding("D", root_cause="supplier_overcharge", counterparty="Supplier", bank_ids=("p",), kind="correct_to"),
+                   finding("E", root_cause="supplier_overcharge", counterparty="Supplier", bank_ids=("q",), kind="correct_to")]
+    draft, _ = assemble_draft([(b("x"), result(*far, other, *corrections))], [], bank_rows=1000)
+    assert [f.id for f in draft.findings] == ["F1", "F2", "F3", "F4", "F5"]
+
+
+def test_exclude_findings_union_their_rows():
+    one = finding("A", root_cause="duplicate_charge", counterparty="Supplier", bank_ids=("d1",), kind="exclude", impact=50)
+    two = finding("B", root_cause="duplicate_charge", counterparty="supplier ", first="2026-08-10", last="2026-08-10",
+                  bank_ids=("d2",), kind="exclude", impact=70)
+    draft, _ = assemble_draft([(b("s"), result(one)), (b("r"), result(two))], [], bank_rows=1000)
+    [f] = draft.findings
+    assert f.treatment.bank_ids == ["d1", "d2"] and f.amounts.impact_cents == 120
+
+
+def test_conflicting_treatments_keep_the_more_confident_and_say_so():
+    dup = finding("A", root_cause="duplicate_charge", counterparty="Supplier", bank_ids=("x",), kind="exclude", confidence=0.6)
+    unrec = finding("B", root_cause="unrecorded_charge", counterparty="Unknown", bank_ids=("x",), kind="exclude", confidence=0.8,
+                    verdict="needs_owner")
+    draft, _ = assemble_draft([(b("s"), result(dup)), (b("u"), result(unrec))], [], bank_rows=1000)
+    [f] = draft.findings
+    assert f.root_cause == "unrecorded_charge" and any("treated the same bank rows differently" in l for l in draft.limitations)
+
+
+def test_summary_coverage_cleared_and_unreviewed():
+    findings = [finding("A", verdict="error", recoverable=True, impact=100, bank_ids=("a",), kind="exclude", root_cause="duplicate_charge"),
+                finding("B", verdict="needs_owner", recoverable="unknown", impact=40, bank_ids=("b",), kind="exclude",
+                        root_cause="unrecorded_charge", counterparty="X"),
+                finding("C", verdict="error", recoverable=False, impact=25, bank_ids=("c",), kind="ongoing", root_cause="card_fee_creep",
+                        counterparty="Y", **{"monthly_cents": 7})]
+    cleared = [dict(bank_ids=["a"], reason="looked fine"), dict(bank_ids=["k"], reason="matches invoice")]
+    draft, info = assemble_draft([(b("one"), result(*findings[:2], cleared=cleared, reviewed=700, limitations=["L1"])),
+                                  (b("two"), result(findings[2], reviewed=700, limitations=["L1", "L2"]))],
+                                 [(b("cash:Q2", "Cash deposits Q2"), "its result was cut off at the output limit")], bank_rows=1000)
+    assert draft.summary.model_dump() == dict(errors=2, needs_owner=1, total_impact_cents=165, recoverable_cents=100,
+                                              ongoing_monthly_cents=7)
+    assert draft.coverage.bank_rows_reviewed == 1000 and draft.coverage.investigated == 2      # capped at bank_rows; summed
+    assert [c.bank_ids for c in draft.cleared] == [["k"]] and info["dropped_cleared"] == 1
+    assert draft.limitations[0] == "Not reviewed: Cash deposits Q2 (its result was cut off at the output limit)."
+    assert draft.limitations.count("L1") == 1 and "L2" in draft.limitations
+    assert info["unreviewed"] == [["cash:Q2", "its result was cut off at the output limit"]]
+
+
+def test_empty_results_assemble_to_an_empty_draft():
+    draft, _ = assemble_draft([(b("a"), result())], [], bank_rows=5)
+    assert draft.findings == [] and draft.summary.total_impact_cents == 0 and draft.coverage.bank_rows_reviewed == 5

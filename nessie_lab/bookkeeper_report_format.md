@@ -231,7 +231,9 @@ model-reported and has not been independently checked. `summary.total_impact_cen
 uses adverse cash differences (expected inflow minus actual inflow, or actual
 outflow minus expected outflow), with unpaid obligations positive as owed.
 
-The two simulated tools read the saved Nessie snapshot and `books.db`. The default
-`as_of` is the latest bank transaction date; no claim of live coverage is made.
-Invoice pending-versus-paid reconciliation is future work until historical invoice
-statuses/payment records are available. The agent does not invent those fields.
+The 11 domain tools read the saved Nessie snapshot and `books.db`, cut off at
+`as_of`. The default `as_of` is the latest bank transaction date; no claim of live
+coverage is made. A cost's payment status is `unknown` unless a payment record
+dated on or before `as_of` exists, and the agent does not invent those fields.
+Bank bill history, open AP and deposits in transit have no dated snapshot and are
+unavailable or omitted.
