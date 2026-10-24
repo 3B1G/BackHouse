@@ -97,6 +97,12 @@ def load_bank_frame():
     return _bank_raw()[["bank_id", "account", "date", "nessie_type", "direction", "amount", "counterparty", "memo"]].copy()
 
 
+def bank_id_map():
+    """{Nessie transaction id: bank_id}, for converting reports that name Nessie's own ids (contracts.from_bk_report)."""
+    tx = _bank_raw()
+    return dict(zip(tx.nessie_id, tx.bank_id))
+
+
 @lru_cache(None)
 def _terms():
     """Card processor and delivery platform rates, parsed from the books' agreements (not from config)."""
