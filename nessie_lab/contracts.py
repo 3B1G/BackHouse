@@ -1,22 +1,33 @@
 """What every piece of Back of House hands to the next. Build to these shapes; change them only together.
 
 Flow:
-  baseline_reconciler.py --SuspiciousItem--> Bookkeeper agent (bookkeeper_tools) --Finding--> checks.py --CheckResult-->
-  Finding --Adjustment--> Forecaster: run_forecast(Scenario, adjustments, ForecastSettings) --> ForecastResult
+  baseline_reconciler.py --SuspiciousItem--> Bookkeeper agent --report--> from_bk_report() --Finding, Adjustment-->
+  checks.py --CheckResult--> passed_adjustments() --Adjustment--> Forecaster
+  Forecaster: run_forecast(Scenario, adjustments, ForecastSettings) --> ForecastResult
   Market scout --CompetitorPrice--> MarketSummary
   Controller --Suggestion--> owner --Approval--> executor.py (the only code that writes) --> ExecutionResult
   every step --AuditEntry--> audit.py (append-only)
 
+Rule
+  Adjustments reach the Forecaster only from findings checks.py passed, and code passes them along
+  (passed_adjustments). A finding downgraded to the owner still passes the adjustments that make the forecast more
+  cautious (money owed, an overcharge that keeps costing), never ones that make it rosier, until the owner answers.
+  The Controller (AI) never writes or edits an adjustment or a money figure: it refers to findings and forecasts by
+  id, and every number it shows comes from a Finding or a ForecastResult.
+
 Conventions
   money   integer cents; field names end in _cents (except SuspiciousItem, which mirrors the reconciler's JSON)
-  dates   datetime.date, YYYY-MM-DD in JSON
-  ids     bank rows: bank_id (T + 9 hex). Book documents: the books' own ids (MDG-CHS-10053, RENT-CHS-2026-10, ...)
+  dates   datetime.date, YYYY-MM-DD in JSON; months YYYY-MM
+  ids     bank rows: bank_id (T + 9 hex), the only bank id in these shapes. A report that names Nessie's own ids is
+          converted at the hand-off with bookkeeper_tools.bank_id_map(). Book documents: the books' own ids
+          (MDG-CHS-10053, RENT-CHS-2026-10, ...)
 Unknown fields are rejected, so a typo fails at the hand-off instead of during the demo.
 JSON: Model.model_validate_json(text) and obj.model_dump_json(). Between uagents, send model_dump_json() in a chat
 message, or subclass uagents.Model with the same fields (uagents also uses pydantic 2).
 The examples in __main__ are made up. Never put real answers (ids of planted errors) into an agent prompt.
 """
 import json
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -26,14 +37,20 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 BANK_ID = r"^T[0-9A-F]{9}$"
 MONTH = r"^\d{4}-(0[1-9]|1[0-2])$"
 ToolName = Literal["get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills",
-                   "get_account_balances",                                                    # bank (Nessie)
-                   "search_costs", "get_cost", "get_agreements", "get_card_batches", "get_cash_deposit_slips",
-                   "get_delivery_payouts"]                                                    # book (books.db)
-BANK_TOOLS = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
+                   "get_account_balances", "search_costs", "get_cost", "get_agreements", "get_card_batches",
+                   "get_cash_deposit_slips", "get_delivery_payouts",                 # bookkeeper_tools.py
+                   "query_nessie", "query_books"]                                    # the bk Bookkeeper's SQL tools
 
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+def _by_month(v, lo, hi, what):
+    for m, x in v.items():
+        if not re.fullmatch(MONTH, m) or not lo <= x <= hi:
+            raise ValueError(f"{what} wants {{'YYYY-MM': {lo}..{hi}}}, got {m}: {x}")
+    return v
 
 
 # ---------------------------------------------------------------- stage one: bookkeeping
@@ -48,24 +65,24 @@ class SuspiciousItem(Contract):
 
 
 class Evidence(Contract):
-    """One fact a finding rests on. checks.py looks for `ref` in the output of a `tool` call in the agent's trace."""
-    tool: ToolName
-    ref: str                                              # the bank_id or cost_id the fact is about
-    fact: str                                             # "no Book cost within $10 of $349.00 for this payee"
+    """One thing a finding rests on. checks.py looks for `ref` in the tool outputs recorded in the agent's trace."""
+    type: Literal["bank_row", "invoice", "agreement", "document", "search", "computed"]   # same values as the bk report
+    ref: str                                              # bank_id, document id, or what was searched or computed
+    tool: ToolName | None = None                          # the tool call it came from, when known
+    fact: str = ""                                        # "no Book cost within $10 of $349.00 for this payee"
     amount_cents: int | None = None
-
-    @property
-    def source(self):
-        return "bank" if self.tool in BANK_TOOLS else "book"
 
 
 class Finding(Contract):
-    """Bookkeeper agent -> checks.py -> Controller. One finding per root cause; many bank rows can share one."""
+    """Bookkeeper -> checks.py -> Controller. One finding per root cause; many bank rows can share one."""
     finding_id: str                                       # "F1", "F2", ... unique within a run
     issue_type: Literal["duplicate_charge", "overcharge", "fee_rate_change", "commission_overcharge", "short_deposit",
                         "missed_payment", "undocumented_charge", "timing_only", "documented", "other"]
     verdict: Literal["error", "ok", "needs_owner"]
     root_cause: str                                       # one line: "card fee charged at 2.9% instead of 2.6% since Aug 1"
+    counterparty: str | None = None
+    first_date: date | None = None
+    last_date: date | None = None
     bank_ids: list[str] = []
     books_refs: list[str] = []
     amount_at_issue_cents: int = Field(ge=0)              # money affected so far
@@ -73,14 +90,15 @@ class Finding(Contract):
     evidence: list[Evidence] = Field(min_length=1)
     explanation: str                                      # plain English for the owner; its numbers must be in evidence
     suggested_action: str | None = None                   # "dispute with the processor", "pay invoice X"
+    assumption_if_unconfirmed: str | None = None          # what the forecast assumes until the owner answers
     confidence: float = Field(ge=0, le=1)
 
     @field_validator("bank_ids")
     @classmethod
     def _bank_ids(cls, v):
-        bad = [b for b in v if not (len(b) == 10 and b[0] == "T" and all(c in "0123456789ABCDEF" for c in b[1:]))]
+        bad = [b for b in v if not re.fullmatch(BANK_ID, b)]
         if bad:
-            raise ValueError(f"not bank_ids: {bad}")
+            raise ValueError(f"not bank_ids (T + 9 hex): {bad}")
         return v
 
     @model_validator(mode="after")
@@ -99,19 +117,22 @@ class CheckResult(Contract):
 
 
 class Adjustment(Contract):
-    """Bookkeeper -> Forecaster: how a confirmed finding changes the cash forecast."""
-    kind: Literal["exclude_row", "ongoing_overcharge", "unpaid_bill"]
+    """Bookkeeper -> Forecaster, only for findings that passed checks.py: how a finding changes the cash forecast."""
+    kind: Literal["exclude_row", "correct_row", "ongoing_overcharge", "unpaid_bill"]
     finding_id: str
-    bank_id: str | None = Field(None, pattern=BANK_ID)    # exclude_row: the bad bank row to leave out of the history
+    bank_id: str | None = Field(None, pattern=BANK_ID)    # exclude_row, correct_row: the bank row
+    correct_amount_cents: int | None = Field(None, gt=0)  # correct_row: what the row should have been
+    since: date | None = None                             # ongoing_overcharge: when it started (is it in the history already?)
+    monthly_cents: int | None = Field(None, gt=0)         # ongoing_overcharge: extra cost per month until fixed
+    recoverable: bool = False                             # ongoing_overcharge: Scenario.fix_findings can stop it
     cost_id: str | None = None                            # unpaid_bill: the Book cost still owed
     amount_cents: int | None = Field(None, gt=0)          # unpaid_bill: amount still to pay
     due_date: date | None = None                          # unpaid_bill: when it should go out (past = pay now)
-    monthly_cents: int | None = Field(None, gt=0)         # ongoing_overcharge: extra cost per month until fixed
-    recoverable: bool = False                             # ongoing_overcharge: the "with fixes" scenario removes it
 
     @model_validator(mode="after")
     def _fields_for_kind(self):
-        need = {"exclude_row": ["bank_id"], "ongoing_overcharge": ["monthly_cents"],
+        need = {"exclude_row": ["bank_id"], "correct_row": ["bank_id", "correct_amount_cents"],
+                "ongoing_overcharge": ["monthly_cents", "since"],
                 "unpaid_bill": ["cost_id", "amount_cents", "due_date"]}[self.kind]
         missing = [f for f in need if getattr(self, f) is None]
         if missing:
@@ -120,23 +141,45 @@ class Adjustment(Contract):
 
 
 # ---------------------------------------------------------------- forecaster (Monte Carlo)
+class OneOff(Contract):
+    cents: int = Field(gt=0)
+    day: date | None = None                               # None = the first forecast day
+    label: str                                            # "walk-in fridge compressor", "refund of a duplicate charge"
+
+
 class Scenario(Contract):
-    """A what-if for run_forecast. Scenario() is the base case."""
+    """A what-if for run_forecast. Scenario() is the base case. Every assumption used must appear in
+    ForecastResult.assumptions, so the owner sees what the numbers rest on."""
     name: str = "base"
-    repair_cents: int = Field(0, ge=0)                    # one-off shock, e.g. 480000 for a $4,800 fridge
-    repair_date: date | None = None                       # default: the first forecast day
-    cover_drop: dict[str, float] = {}                     # {"2027-01": 0.15} = 15% fewer covers that month
+    one_off_costs: list[OneOff] = []                      # e.g. a $4,800 fridge repair
+    one_off_income: list[OneOff] = []                     # e.g. a supplier refunding a duplicate charge
+    cover_change: dict[str, float] = {}                   # {"2027-01": -0.15} = 15% fewer covers that month; -1..+1
     price_changes_cents: dict[str, int] = {}              # {"Margherita Pizza": 2000}: new dine-in dinner price
     remove_items: list[str] = []                          # dishes taken off the menu
-    recover_fees: bool = False                            # card fee back to the agreed rate
+    changes_start: date | None = None                     # when price and menu changes take effect; None = first forecast day
+    price_response: float | dict[str, float] = 0.05       # share of a dish's orders lost when its price rises (gained on a cut):
+                                                          # one value for every dish, or {dish: share}
+    substitution: float = Field(0.7, ge=0, le=1)          # share of a removed dish's diners who order another dish instead
+    fix_findings: list[str] = []                          # finding_ids whose recoverable ongoing overcharges stop
     supplier_stretch_days: dict[str, int] = {}            # {"Mission Dry Goods": 15}: pay this supplier N days later
 
-    @field_validator("cover_drop")
+    @field_validator("cover_change")
     @classmethod
-    def _months(cls, v):
-        for m, x in v.items():
-            if len(m) != 7 or m[4] != "-" or not (0 <= x <= 1):
-                raise ValueError(f"cover_drop wants {{'YYYY-MM': fraction 0..1}}, got {m}: {x}")
+    def _covers(cls, v):
+        return _by_month(v, -1, 1, "cover_change")
+
+    @field_validator("price_response")
+    @classmethod
+    def _response(cls, v):
+        if any(not 0 <= x <= 1 for x in (v.values() if isinstance(v, dict) else [v])):
+            raise ValueError("price_response is a share of orders, 0..1")
+        return v
+
+    @field_validator("price_changes_cents", "supplier_stretch_days")
+    @classmethod
+    def _positive(cls, v):
+        if any(x <= 0 for x in v.values()):
+            raise ValueError("values must be positive")
         return v
 
 
@@ -144,14 +187,40 @@ class ForecastSettings(Contract):
     trials: int = Field(1000, gt=0)
     horizon_months: int = Field(24, gt=0)
     seed: int = 13
+    as_of: date | None = None                             # forecast as if it were this day (backtests); None = the day the books close
+
+
+class MonthBand(Contract):
+    month: str = Field(pattern=MONTH)
+    worst_cents: int                                      # month-end cash, 1 in 10 trials lower
+    likely_cents: int                                     # median
+    best_cents: int                                       # 1 in 10 trials higher
+
+    @model_validator(mode="after")
+    def _ordered(self):
+        if not self.worst_cents <= self.likely_cents <= self.best_cents:
+            raise ValueError("need worst_cents <= likely_cents <= best_cents")
+        return self
+
+
+class VsBase(Contract):
+    """How a scenario differs from the base case, so the Controller quotes numbers instead of computing them."""
+    base_forecast_id: str | None = None
+    days_moved_worst: int | None = None                   # positive = runs out later than the base case;
+    days_moved_likely: int | None = None                  # None = beyond the horizon in one of the two runs
+    days_moved_best: int | None = None
+    days_moved_average: float | None = None
+    cash_change_cents: int | None = None                  # cash difference on the base case's likely run-out day
+    floor_days_moved_likely: int | None = None            # how far the likely "below payroll + rent" date moved
 
 
 class ForecastResult(Contract):
     """run_forecast(scenario: Scenario, adjustments: list[Adjustment] | None = None,
                     settings: ForecastSettings | None = None) -> ForecastResult
     Run-out dates are percentiles over trials. None = beyond the horizon (that share of trials never hits $0)."""
+    forecast_id: str | None = None                        # lets checks.py and the audit log trace every number shown
     scenario: str
-    as_of: date                                           # last bank date the forecast starts from
+    as_of: date                                           # the day the books close (or settings.as_of); the forecast starts the next day
     starting_cash_cents: int
     run_out_worst: date | None                            # 1 in 10 trials run out earlier than this
     run_out_likely: date | None                           # median
@@ -162,6 +231,9 @@ class ForecastResult(Contract):
     trials: int
     horizon_months: int
     seed: int
+    assumptions: list[str] = []                           # every assumption behind these numbers, in plain English
+    monthly_bands: list[MonthBand] = []                   # month-end cash for the dashboard chart
+    vs_base: VsBase | None = None                         # None for the base case itself
     chart_path: str | None = None
 
     @model_validator(mode="after")
@@ -207,18 +279,26 @@ class MarketSummary(Contract):
 
 # ---------------------------------------------------------------- controller, owner, executor, audit
 class Suggestion(Contract):
-    """Controller -> owner. Nothing is applied without an Approval."""
+    """Controller -> owner. Nothing is applied without an Approval. Numbers come from ForecastResults, never the AI."""
     suggestion_id: str
     action: Literal["reprice_item", "remove_item", "dispute_charge", "pay_bill", "stretch_supplier", "other"]
     title: str                                            # "Raise Margherita Pizza from $18 to $20"
     target: str                                           # the dish, supplier, cost_id or bank_id it applies to
-    new_value: int | None = None                          # reprice_item: new price in cents; stretch_supplier: extra days
+    new_price_cents: int | None = Field(None, gt=0)       # reprice_item
+    extra_days: int | None = Field(None, gt=0)            # stretch_supplier
     monthly_cash_effect_cents: int | None = None          # positive = more cash each month
     one_time_cash_effect_cents: int | None = None
-    run_out_likely_before: date | None = None             # from ForecastResult runs without and with this change
+    run_out_likely_before: date | None = None             # from the base and scenario ForecastResults (vs_base)
     run_out_likely_after: date | None = None
-    assumptions: list[str] = Field(min_length=1)          # "5% of Margherita orders lost at the new price"
-    based_on: list[str] = []                              # finding_ids, our_item of a MarketSummary, scenario names
+    assumptions: list[str] = Field(min_length=1)          # from the forecast that produced the numbers
+    based_on: list[str] = []                              # finding_ids, forecast_ids, our_item of a MarketSummary
+
+    @model_validator(mode="after")
+    def _value_for_action(self):
+        need = {"reprice_item": "new_price_cents", "stretch_supplier": "extra_days"}.get(self.action)
+        if need and getattr(self, need) is None:
+            raise ValueError(f"{self.action} needs {need}")
+        return self
 
 
 class Approval(Contract):
@@ -275,6 +355,101 @@ def findings_to_flags(findings):
     return flags
 
 
+CAUTIOUS = {"unpaid_bill", "ongoing_overcharge"}         # adjustments that can only make the forecast more careful
+
+
+def passed_adjustments(adjustments, checks):
+    """The rule in code. Findings checks.py passed: all their adjustments. Findings downgraded to the owner: only the
+    cautious ones (money owed, an overcharge that keeps costing), never counted as recoverable until the owner
+    confirms. Rejected or unchecked findings: nothing."""
+    status = {c.ref: c.status for c in checks if c.subject == "bookkeeper"}
+    out = []
+    for a in adjustments:
+        if status.get(a.finding_id) == "pass":
+            out.append(a)
+        elif status.get(a.finding_id) == "downgrade" and a.kind in CAUTIOUS:
+            out.append(a.model_copy(update={"recoverable": False}))
+    return out
+
+
+BK_ISSUE = {"duplicate_charge": "duplicate_charge", "supplier_overcharge": "overcharge", "commission_overcharge": "commission_overcharge",
+            "card_fee_creep": "fee_rate_change", "cash_deposit_short": "short_deposit", "unrecorded_charge": "undocumented_charge",
+            "missed_payment": "missed_payment"}
+
+
+def _first_sentence(text, limit=160):
+    """'TableTap charged 2.9%, not 2.6%, since Aug 1. More...' -> the first sentence; decimals like $349.00 stay whole."""
+    s = re.split(r"(?<=[.!?])\s+", (text or "").strip(), maxsplit=1)[0]
+    return s if len(s) <= limit else s[:limit - 3].rstrip() + "..."
+
+
+def _why(e):
+    errors = e.errors() if hasattr(e, "errors") else None          # pydantic: name the field and the rule broken
+    if errors:
+        loc = ".".join(map(str, errors[0]["loc"]))
+        return f"{loc}: {errors[0]['msg']}" if loc else errors[0]["msg"]
+    return f"{type(e).__name__}: {e}"
+
+
+def from_bk_report(report, id_map=None):
+    """A report from the bk Bookkeeper (schema 1.1: a dict, JSON text or a file path) -> (findings, adjustments, rejected).
+    Nessie ids become bank_ids through id_map ({nessie_id: bank_id}, from bookkeeper_tools.bank_id_map()).
+    `rejected` maps finding ids to what was dropped and why: "finding: ..." (not converted; treat it like a failed
+    check) or "adjustment: ..." (the finding is kept for the owner, but it doesn't change the forecast).
+    Unverified: run checks.py on the findings, then hand passed_adjustments() to the Forecaster."""
+    if isinstance(report, Path) or (isinstance(report, str) and not report.lstrip().startswith("{")):
+        report = Path(report).read_text()
+    if isinstance(report, str):
+        report = json.loads(report)
+    id_map = id_map or {}
+
+    def bank_id(x):
+        if re.fullmatch(BANK_ID, x):
+            return x
+        if x in id_map:
+            return id_map[x]
+        raise ValueError(f"bank reference {x} is neither a bank_id nor a known Nessie id")
+
+    def treatment(fid, raw):
+        t, recoverable = raw["treatment"], raw.get("recoverable") is True
+        if t["kind"] == "exclude":
+            return [Adjustment(kind="exclude_row", finding_id=fid, bank_id=bank_id(b)) for b in t["bank_ids"]]
+        if t["kind"] == "correct_to":
+            return [Adjustment(kind="correct_row", finding_id=fid, bank_id=bank_id(t["bank_id"]), correct_amount_cents=t["cents"])]
+        if t["kind"] == "ongoing":
+            return [Adjustment(kind="ongoing_overcharge", finding_id=fid, since=t["since"], monthly_cents=t["monthly_cents"],
+                               recoverable=recoverable)]
+        if t["kind"] == "owed":
+            return [Adjustment(kind="unpaid_bill", finding_id=fid, cost_id=(raw.get("books_refs") or [None])[0],
+                               amount_cents=t["cents"], due_date=t["due"])]
+        raise ValueError(f"unknown treatment {t['kind']!r}")
+
+    findings, adjustments, rejected = [], [], {}
+    for raw in report.get("findings", []):
+        fid = str(raw.get("id"))
+        try:
+            t = raw.get("treatment") or {}
+            f = Finding(finding_id=fid, issue_type=BK_ISSUE.get(raw["root_cause"], "other"), verdict=raw["verdict"],
+                        root_cause=_first_sentence(raw.get("explanation"))
+                        or f"{raw['root_cause'].replace('_', ' ')}: {raw.get('counterparty') or 'unknown payee'}",
+                        counterparty=raw.get("counterparty"), first_date=(raw.get("dates") or {}).get("first"),
+                        last_date=(raw.get("dates") or {}).get("last"), bank_ids=[bank_id(b) for b in raw.get("bank_ids", [])],
+                        books_refs=raw.get("books_refs", []), amount_at_issue_cents=abs(raw["amounts"]["impact_cents"]),
+                        monthly_impact_cents=t.get("monthly_cents") if t.get("kind") == "ongoing" else None,
+                        evidence=[Evidence(type=e["type"], ref=id_map.get(e["ref"], e["ref"])) for e in raw.get("evidence", [])],
+                        explanation=raw["explanation"], suggested_action=raw.get("suggested_action"),
+                        assumption_if_unconfirmed=raw.get("assumption_if_unconfirmed"), confidence=raw["confidence"])
+        except (KeyError, TypeError, ValueError) as e:        # pydantic's ValidationError is a ValueError
+            rejected[fid] = f"finding: {_why(e)}"
+            continue
+        findings.append(f)
+        try:
+            adjustments += treatment(fid, raw)
+        except (KeyError, TypeError, ValueError) as e:        # keep the finding for the owner; it just doesn't move the forecast
+            rejected[fid] = f"adjustment: {_why(e)}"
+    return findings, adjustments, rejected
+
+
 if __name__ == "__main__":
     from pydantic import ValidationError
 
@@ -282,24 +457,57 @@ if __name__ == "__main__":
     print(f"reconciler output fits SuspiciousItem: {len(items)} items")
     now = datetime(2026, 10, 24, 12, 0)
     f = Finding(finding_id="F1", issue_type="overcharge", verdict="error", root_cause="Supplier debited $50 more than the invoice",
-                bank_ids=["T0A1B2C3D4"], books_refs=["XYZ-CHS-00001"], amount_at_issue_cents=5000,
-                evidence=[Evidence(tool="get_bank_transaction", ref="T0A1B2C3D4", fact="debit of $550.00", amount_cents=55000),
-                          Evidence(tool="get_cost", ref="XYZ-CHS-00001", fact="invoice total $500.00", amount_cents=50000)],
+                counterparty="Example Supplier", bank_ids=["T0A1B2C3D4"], books_refs=["XYZ-CHS-00001"], amount_at_issue_cents=5000,
+                evidence=[Evidence(type="bank_row", ref="T0A1B2C3D4", tool="get_bank_transaction", fact="debit of $550.00", amount_cents=55000),
+                          Evidence(type="invoice", ref="XYZ-CHS-00001", tool="get_cost", fact="invoice total $500.00", amount_cents=50000)],
                 explanation="Example Supplier took $550.00 for a $500.00 invoice.", suggested_action="ask for a $50 refund",
                 confidence=0.9)
-    a = Adjustment(kind="ongoing_overcharge", finding_id="F2", monthly_cents=30000, recoverable=True)
-    r = ForecastResult(scenario="base", as_of=date(2026, 10, 24), starting_cash_cents=10_000_000, run_out_worst=date(2027, 5, 1),
-                       run_out_likely=date(2027, 7, 1), run_out_best=None, share_running_out=0.7, safety_floor_cents=5_000_000,
-                       below_floor_likely=date(2027, 2, 1), trials=1000, horizon_months=24, seed=13)
+    adj = [Adjustment(kind="correct_row", finding_id="F1", bank_id="T0A1B2C3D4", correct_amount_cents=50000),
+           Adjustment(kind="ongoing_overcharge", finding_id="F2", since=date(2026, 8, 1), monthly_cents=30000, recoverable=True)]
+    r = ForecastResult(forecast_id="fc-1", scenario="fridge", as_of=date(2026, 10, 24), starting_cash_cents=10_000_000,
+                       run_out_worst=date(2027, 5, 1), run_out_likely=date(2027, 7, 1), run_out_best=None, share_running_out=0.7,
+                       safety_floor_cents=5_000_000, below_floor_likely=date(2027, 2, 1), trials=1000, horizon_months=24, seed=13,
+                       assumptions=["5% of a dish's orders lost per price rise"],
+                       monthly_bands=[MonthBand(month="2026-11", worst_cents=9_000_000, likely_cents=9_500_000, best_cents=9_900_000)],
+                       vs_base=VsBase(base_forecast_id="fc-0", days_moved_likely=-28, cash_change_cents=-480_000,
+                                      floor_days_moved_likely=-21))
     s = Suggestion(suggestion_id="S1", action="reprice_item", title="Raise Example Dish from $18 to $20", target="Example Dish",
-                   new_value=2000, monthly_cash_effect_cents=60000, assumptions=["5% fewer orders at the new price"], based_on=["F1"])
-    for obj in (f, a, r, s, Scenario(name="fridge", repair_cents=480000, cover_drop={"2027-01": 0.15})):
+                   new_price_cents=2000, monthly_cash_effect_cents=60000, assumptions=["5% fewer orders at the new price"],
+                   based_on=["F1", "fc-1"])
+    sc = Scenario(name="fridge", one_off_costs=[OneOff(cents=480000, label="walk-in fridge compressor")],
+                  cover_change={"2027-01": -0.15}, price_response={"Example Dish": 0.3}, fix_findings=["F2"])
+    for obj in (f, *adj, r, s, sc, ForecastSettings(as_of=date(2026, 7, 24))):
         assert type(obj).model_validate_json(obj.model_dump_json()) == obj
-    print("examples round-trip through JSON; flags for grade.py:", findings_to_flags([f]))
+    print("examples round-trip through JSON; flags:", findings_to_flags([f]))
+    adj.append(Adjustment(kind="exclude_row", finding_id="F2", bank_id="T0A1B2C3D4"))
+    checks = [CheckResult(subject="bookkeeper", ref="F1", status="pass"), CheckResult(subject="bookkeeper", ref="F2", status="downgrade")]
+    passed = [(a.finding_id, a.kind, a.recoverable) for a in passed_adjustments(adj, checks)]
+    assert passed == [("F1", "correct_row", False), ("F2", "ongoing_overcharge", False)], passed
+    print("passed adjustments (F1 passed; F2 downgraded keeps only the cautious one, not recoverable):", passed)
+
+    def bk_row(i, cause, ids, treat, **kw):
+        return {"id": i, "root_cause": cause, "verdict": "error", "confidence": 0.9, "counterparty": "X", "bank_ids": ids,
+                "dates": {"first": "2026-08-01", "last": "2026-10-23"}, "books_refs": [], "amounts": {"impact_cents": 34900},
+                "explanation": "Example Processor charged 2.9% instead of 2.6%, costing $349.00 so far. More detail.",
+                "evidence": [{"type": "bank_row", "ref": "nessie-abc"}], "treatment": treat, "recoverable": True,
+                "suggested_action": "x", **kw}
+    owed = {"kind": "owed", "cents": 127662, "due": "2026-09-26"}
+    bk = {"findings": [bk_row("B1", "card_fee_creep", ["nessie-abc"], {"kind": "ongoing", "since": "2026-08-01", "monthly_cents": 30000}),
+                       bk_row("B2", "duplicate_charge", ["nessie-unknown"], {"kind": "exclude", "bank_ids": ["nessie-unknown"]}),
+                       bk_row("B3", "missed_payment", [], owed, books_refs=["XYZ-CHS-00002"]),
+                       bk_row("B4", "missed_payment", ["nessie-abc"], owed)]}          # owed, but no document id
+    fs, ads, dropped = from_bk_report(bk, {"nessie-abc": "T0A1B2C3D4"})
+    assert [x.finding_id for x in fs] == ["B1", "B3", "B4"] and [a.finding_id for a in ads] == ["B1", "B3"], (fs, ads)
+    assert fs[0].root_cause.endswith("costing $349.00 so far.") and set(dropped) == {"B2", "B4"}, (fs[0].root_cause, dropped)
+    print("bk report ->", [(x.finding_id, x.issue_type) for x in fs], "| root_cause:", repr(fs[0].root_cause))
+    print("  dropped:", dropped)
     bad = [lambda: Finding(**{**f.model_dump(), "bank_ids": ["349.00"]}),
-           lambda: Adjustment(kind="unpaid_bill", finding_id="F3"),
-           lambda: Scenario(cover_drop={"January": 15}),
-           lambda: Suggestion(**{**s.model_dump(), "assumptions": []}),
+           lambda: Adjustment(kind="correct_row", finding_id="F3", bank_id="T0A1B2C3D4"),
+           lambda: Adjustment(kind="ongoing_overcharge", finding_id="F3", monthly_cents=100),
+           lambda: Scenario(cover_change={"2027-01": -1.5}),
+           lambda: Scenario(price_response=5),
+           lambda: Suggestion(**{**s.model_dump(), "new_price_cents": None}),
+           lambda: MonthBand(month="2026-11", worst_cents=3, likely_cents=2, best_cents=1),
            lambda: Finding(**{**f.model_dump(), "amount": 5000})]
     for make in bad:
         try:

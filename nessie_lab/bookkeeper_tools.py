@@ -97,6 +97,19 @@ def load_bank_frame():
     return _bank_raw()[["bank_id", "account", "date", "nessie_type", "direction", "amount", "counterparty", "memo"]].copy()
 
 
+def bank_id_map():
+    """{Nessie transaction id: bank_id}, for converting reports that name Nessie's own ids (contracts.from_bk_report).
+    Uses the Nessie sync when present, else the committed upload manifest (ids never change after the upload)."""
+    try:
+        tx = _bank_raw()
+        return dict(zip(tx.nessie_id, tx.bank_id))
+    except FileNotFoundError:
+        manifest = D / f"nessie_manifest_{TAG}.json"
+        if not manifest.exists():
+            raise FileNotFoundError(f"neither {BANK_DB.name} nor {manifest.name} exists: run python nessie_sync.py --tag {TAG}") from None
+        return {nid: bid for bid, nid in json.loads(manifest.read_text())["tx"].items()}
+
+
 @lru_cache(None)
 def _terms():
     """Card processor and delivery platform rates, parsed from the books' agreements (not from config)."""
