@@ -1,6 +1,9 @@
 """Pull everything for a manifest back from Nessie into data/nessie_sync_<tag>.db and verify the round trip.
 
   python nessie_sync.py --tag sample1 [--days 5]
+
+Tables: bank_tx (bank_feed.csv columns + nessie_id, status), bank_bills (pending AP and recurring autopays),
+bank_accounts (Nessie's balance is the opening balance: it never changes, so derive running balances from bank_tx).
 """
 import argparse, json, re, sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -14,6 +17,9 @@ from nessie_client import call
 
 D = Path(__file__).parent / "data"
 REF = re.compile(r"\s*\|ref=(\w+)$")
+DIRECTION = {"deposit": "in", "withdrawal": "out", "purchase": "out"}
+BILL_COLS = ["account", "_id", "status", "payee", "nickname", "payment_date", "recurring_date", "upcoming_payment_date",
+             "payment_amount", "creation_date"]
 
 
 def pull(manifest):
@@ -31,11 +37,23 @@ def pull(manifest):
                 continue
             desc = x.get("description") or ""
             m = REF.search(desc)
-            rows.append(dict(nessie_id=x.get("_id") or x.get("id"), account=a, nessie_type=kinds[k],
+            rows.append(dict(nessie_id=x.get("_id") or x.get("id"), account=a, nessie_type=kinds[k], direction=DIRECTION[kinds[k]],
                              date=x.get("purchase_date") or x.get("transaction_date"), amount=x.get("amount"),
                              counterparty=merchant_name.get(x.get("merchant_id")), memo=REF.sub("", desc),
                              bank_id=m.group(1) if m else None, status=x.get("status")))
-    return pd.DataFrame(rows), pd.DataFrame(bills)
+    bills = pd.DataFrame(bills).reindex(columns=BILL_COLS).rename(columns={"_id": "nessie_id"})
+    bills["payment_amount"] = pd.to_numeric(bills.payment_amount).round().astype("Int64")     # comes back as a float; cents
+    bills["recurring_date"] = pd.to_numeric(bills.recurring_date, errors="coerce").astype("Int64")
+    return pd.DataFrame(rows), bills
+
+
+def pull_accounts(manifest):
+    out = []
+    for a, aid in manifest["accounts"].items():
+        x = call("GET", f"/accounts/{aid}")
+        out.append(dict(account=a, nessie_id=aid, type=x.get("type"), nickname=x.get("nickname"),
+                        opening_balance_cents=int(x.get("balance") or 0)))
+    return pd.DataFrame(out)
 
 
 def verify(got, days=None):
@@ -50,6 +68,7 @@ def verify(got, days=None):
         "duplicate refs in Nessie": int(got.bank_id.duplicated().sum()),
         "amount mismatches": int((both.amount != both.amount_n).sum()), "date mismatches": int((both.date != both.date_n).sum()),
         "type mismatches": int((both.nessie_type != both.nessie_type_n).sum()), "memo mismatches": int((both.memo != both.memo_n).sum()),
+        "direction mismatches": int((both.direction != both.direction_n).sum()),
         "account mismatches": int((both.account != both.account_n).sum()),
     }
     for k, v in checks.items():
@@ -66,15 +85,17 @@ if __name__ == "__main__":
     manifest = json.loads((D / f"nessie_manifest_{a.tag}.json").read_text())
     tx, bills = pull(manifest)
     if a.repair and tx.bank_id.duplicated().any():
-        path = {"deposit": "deposits", "withdrawal": "withdrawal", "purchase": "purchase"}
+        path = {"deposit": "deposits", "withdrawal": "withdrawals", "purchase": "purchases"}
         extra = tx[tx.bank_id.notna() & tx.bank_id.duplicated()]
         for r in extra.itertuples():
             call("DELETE", f"/{path[r.nessie_type]}/{r.nessie_id}")
         print(f"repair: deleted {len(extra)} duplicate rows")
         tx, bills = pull(manifest)
     con = sqlite3.connect(D / f"nessie_sync_{a.tag}.db")
+    accounts = pull_accounts(manifest)
     tx.to_sql("bank_tx", con, if_exists="replace", index=False)
-    bills.astype(str).to_sql("bank_bills", con, if_exists="replace", index=False)
+    bills.to_sql("bank_bills", con, if_exists="replace", index=False)
+    accounts.to_sql("bank_accounts", con, if_exists="replace", index=False)
     con.close()
-    print(f"pulled {len(tx)} transactions, {len(bills)} bills")
+    print(f"pulled {len(tx)} transactions, {len(bills)} bills, {len(accounts)} accounts")
     print("round trip OK" if verify(tx, a.days) else "ROUND TRIP FAILED")

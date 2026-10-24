@@ -31,6 +31,7 @@ The restaurant is deliberately weaker than the median: it's slowly losing money.
 
 ```
 python generate.py        # data/books.db, data/bank_feed.csv, data/grader/*
+python build_book.py      # adds the Book (costs, cost_lines) to books.db; rerun after every generate.py
 python features.py        # data/features.db
 python eda.py             # eda/report.md + charts
 python scenario_check.py  # does the data support the demo story?
@@ -38,7 +39,28 @@ python baseline_reconciler.py && python grade.py data/flags_baseline.json   # ru
 python nessie_load.py dry-run                      # validate every payload, no network
 python nessie_load.py full --tag <tag>             # ~1,326 calls, ~2 min at 8 workers
 python nessie_sync.py --tag <tag>                  # pull back + verify round trip
+python bookkeeper_tools.py                         # demo the Bookkeeper's tools on both databases
 ```
+
+Current Nessie tag: **`boh-1loc`** (one restaurant, matches `ACTIVE_LOCATIONS = ["CHS"]`). `boh-dev` is the old two-location load.
+Teammates don't need to reload: with the committed manifest, `python nessie_sync.py --tag boh-1loc` pulls the bank down.
+
+## The Book and the Bookkeeper's tools
+
+`build_book.py` turns the scattered cost documents into one table the agent can search. `costs` has one row per cost
+(supplier invoices, vendor bills, rent, payroll, loan payments, sales tax, repairs, permits, owner draws, chargebacks) with payee,
+category, dates, amount, a plain-English description and a **status**: `paid` (the books treat it as paid), `pending` (billed,
+unpaid at 2026-10-24: the same 27 items as Nessie's pending bills) or `scheduled` (next rent, future loan installments).
+`cost_lines` holds what each cost is made of (ingredients with quantities and unit prices, payroll components, interest vs
+principal). Status comes from the books only, never the bank: an autopay invoice the bank never paid stays `paid`, and finding
+that is the Bookkeeper's job. Cost ids match the books' references, so they work as `books_ref` in `grade.py`.
+
+`bookkeeper_tools.py` gives the agent 11 read-only tools as Claude tool definitions (`TOOLS`). Each reads one source:
+bank (the Nessie sync): `get_bank_transaction`, `search_bank_transactions`, `get_payee_history`, `get_bank_bills`, `get_account_balances`;
+book: `search_costs`, `get_cost`, `get_agreements`, `get_card_batches`, `get_cash_deposit_slips`, `get_delivery_payouts`.
+`ToolSession(max_calls=8)` enforces the call budget and records the trace for `checks.py`; the module docstring has the agent loop.
+`load_bank_frame()` returns the Nessie copy shaped like `bank_feed.csv`. Amount searches should carry a date window: a supplier's
+other invoices can have near-identical amounts months apart.
 
 The generator is deterministic (seed 13). Two runs produce byte-identical files.
 
@@ -49,6 +71,7 @@ The generator is deterministic (seed 13). Two runs produce byte-identical files.
 | `data/books.db` | agents | The restaurant's own documents (below). No "expected bank" table: agents derive expectations |
 | `data/bank_feed.csv` | agents, Nessie loader | Bank-visible columns only: `bank_id, account, date, nessie_type, direction, amount, counterparty (purchases only), memo` |
 | `data/features.db` | agents | Feature tables built from the two above |
+| `data/nessie_sync_<tag>.db` | agents | The bank as pulled back from Nessie: `bank_tx` (bank_feed.csv columns + nessie_id, status), `bank_bills`, `bank_accounts` |
 | `data/grader/` | **scoring scripts only** | `answer_key.json`, `ledger_expected.csv`, `bank_truth.csv`. Never load into Nessie or an agent's context |
 
 ### books.db tables
