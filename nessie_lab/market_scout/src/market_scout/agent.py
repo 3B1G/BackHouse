@@ -240,9 +240,11 @@ def make_agent(root: Path, port=8003, local_only=False, offline=None):
         "registration_policy": LocalRegistration(),
         "resolve": RulesBasedResolver(resolver_rules(root)),
     }
-    agent = Agent(name="market_scout", seed=seed, port=port, mailbox=mailbox,
-                  endpoint=[f"http://127.0.0.1:{port}/submit"], enable_agent_inspector=False,
-                  publish_agent_details=mailbox, report_events=False, **local_options)
+    # uagents 0.26.1: an explicit endpoint overrides the mailbox, so only pass one in local mode. Mailbox mode
+    # needs the inspector on, because Agentverse connects the mailbox through it (loopback only).
+    where = {} if mailbox else {"endpoint": [f"http://127.0.0.1:{port}/submit"]}
+    agent = Agent(name="market_scout", seed=seed, port=port, mailbox=mailbox, enable_agent_inspector=mailbox,
+                  publish_agent_details=mailbox, report_events=False, **where, **local_options)
     agent.include(build_protocol(MarketScout(root, offline=offline)), publish_manifest=mailbox)
     return agent
 
