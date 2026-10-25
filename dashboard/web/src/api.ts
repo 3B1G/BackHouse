@@ -92,6 +92,8 @@ export type Plan = {
   bills: { before: string; count: number; total_cents: number } | null;
   market: { offline: boolean; menu_as_of: string; positions: PricePosition[] } | null;
   fixes: Fix[];
+  /** Approved changes that haven't started yet: when nothing is left to suggest, these are why. */
+  upcoming?: { dish: string; kind: string; new_price_cents: number | null; old_price_cents: number | null; available: number | boolean | null; starts: string }[];
   brief: string;
 };
 
@@ -145,6 +147,9 @@ export const owner = {
   setup: (passphrase: string) => post<OwnerReview>("/api/owner/setup", { passphrase }),
   commit: (passphrase: string) => post<OwnerReview>("/api/owner/commit", { passphrase }),
   approve: (file: string, passphrase: string) => post<Approved>("/api/owner/approve", { file, passphrase }),
+  /** Demo only: clears every approval and the owner passphrase (the price database is rebuilt); the decisions on the
+   * findings stay, so signing the review again brings the suggestions back. */
+  resetDemo: () => post<OwnerReview>("/api/demo/reset", { confirm: "reset the demo" }),
   /** The owner's own price: forecast and dry-run, returned as a suggestion to approve. */
   propose: (dish: string, new_price_cents: number) => post<{ fix: Fix }>("/api/owner/propose", { dish, new_price_cents }),
   decline: (fx: Fix) => post<{ ok: boolean }>("/api/owner/decline", { id: fx.id, action: fx.action, dish: fx.dish, new_price_cents: fx.new_price_cents, title: fx.title }),

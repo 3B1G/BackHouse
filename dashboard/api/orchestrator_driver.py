@@ -233,6 +233,19 @@ def context(session):
     return out
 
 
+def reset_demo(session):
+    """The footer's "Reset the demo": the price database deleted and rebuilt from the books (cost-price build), so every
+    approval, approved change and the owner key are gone. The owner's decisions on the findings stay: signing the review
+    again, with a new passphrase, reopens the suggestions."""
+    from cost_price.build import build
+
+    db = LAB / "data" / "cost_price.db"
+    for path in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
+        path.unlink(missing_ok=True)
+    build(LAB)
+    return owner_status(session)
+
+
 def read_menu(session):
     """The menu as the price database has it today, and the approved changes that haven't started. Read-only."""
     m = tools.call(session, "get_menu", {})
@@ -251,7 +264,12 @@ def main():
             b = brief(session)
             menu = next((e["result"] for e in reversed(session.log)
                          if e["name"] == "get_menu" and "error" not in e["result"]), {})
-            emit(kind="done", text=b["text"], facts=b["facts"], menu=menu)
+            # The approved changes still to start: when nothing is left to suggest, they are why.
+            up = next((e["result"] for e in reversed(session.log) if e["name"] == "list_upcoming_changes"), None) \
+                or tools.call(session, "list_upcoming_changes", {})
+            emit(kind="done", text=b["text"], facts=b["facts"], menu=menu, upcoming=up.get("changes", []) if "error" not in up else [])
+        elif mode == "reset":
+            emit(kind="done", **reset_demo(session))
         elif mode == "ask":
             out = asyncio.run(turn(session, sys.stdin.read()))
             emit(kind="done", **out, proposals=proposals(session))
