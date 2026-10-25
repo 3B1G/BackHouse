@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { api, followRun, recall, remember, type Finding, type Forecast, type Scenario, type StepEvent, type StepId } from "../api";
+import { api, followRun, recall, remember, type Finding, type Forecast, type Plan, type Scenario, type StepEvent, type StepId } from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
+import { ChangesSection } from "../components/ChangesSection";
 import { GetStarted } from "../components/GetStarted";
 import { Hero } from "../components/Hero";
 import { TrendPanel } from "../components/TrendPanel";
@@ -14,6 +15,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
   );
   const [steps, setSteps] = useState<Partial<Record<StepId, StepEvent>>>({});
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [finished, setFinished] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [shown, setShown] = useState<Forecast | null>(null);
@@ -27,6 +29,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
     if (!runId) return;
     setSteps({});
     setFindings([]);
+    setPlan(null);
     setFinished(false);
     setFailed(null);
     setShown(null);
@@ -40,6 +43,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
           setSteps((s) => ({ ...s, [e.step]: e }));
           if (e.forecast) setShown(e.forecast);
         } else if (e.type === "finding") setFindings((f) => [...f, e.finding]);
+        else if (e.type === "plan") setPlan(e.plan);
         else if (e.type === "done") setFinished(true);
         else if (e.type === "error") setFailed(`${e.text}. Nothing was changed.`);
       },
@@ -109,7 +113,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
 
   if (view === "forecast")
     return <ForecastView f={shown} running={!!runId} compare={selected.length > 0} pending={pending} whatIfs={whatIfs} />;
-  if (view === "how") return <HowItWorks steps={steps} running={!!runId} />;
+  if (view === "how") return <HowItWorks steps={steps} running={!!runId} plan={plan} />;
 
   return (
     <>
@@ -131,6 +135,8 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
               </p>
             </section>
           )}
+
+          <ChangesSection plan={plan} market={steps.market} step={steps.orchestrator} started={!!runId} />
 
           <section aria-labelledby="problems-heading" className="min-w-0">
             <h2 id="problems-heading" className="font-display text-3xl font-extrabold text-ink [font-stretch:80%]">

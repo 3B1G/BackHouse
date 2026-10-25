@@ -107,7 +107,8 @@ def test_brief_on_a_copy_of_the_real_data(tmp_path, no_network, no_llm_key, role
     """The real Forecaster, Market scout (saved pages) and CH dry run on a scratch copy (data/grader/ is skipped).
     With the gates on (no Bookkeeper report in the real data): the Audit stage, cash and bills only, nothing written.
     Then with the gates opened by hand, the full brief as before."""
-    shutil.copytree(REAL_DATA, tmp_path / "data", ignore=lambda d, names: ["grader"] if Path(d) == REAL_DATA else [])
+    local = ["grader", "orchestrator", "reports", "suggestions"]          # this laptop's review state stays out of the copy
+    shutil.copytree(REAL_DATA, tmp_path / "data", ignore=lambda d, names: local if Path(d) == REAL_DATA else [])
     assert not (tmp_path / "data" / "grader").exists()
     before = sorted(p.relative_to(tmp_path).as_posix() for p in (tmp_path / "data").rglob("*") if p.is_file())
     gated = brief(Session(tmp_path))

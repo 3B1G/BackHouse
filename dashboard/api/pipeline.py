@@ -2,7 +2,8 @@
 
 Steps that exist as nessie_lab scripts run as real subprocesses; their numbers are read back from what they wrote, and what
 they print streams to the developer page line by line (tracelog). The Bookkeeper step loads the newest saved Bookkeeper
-report (data/reports/) until the agent runs inside this step.
+report (data/reports/) until the agent runs inside this step. The check ends with the orchestrator's brief
+(orchestrator_bridge.py): Market scout compares prices, then the orchestrator suggests changes for the owner to approve.
 """
 import json
 import os
@@ -19,10 +20,12 @@ from datetime import date
 import core
 from core import DATA, LAB, TAG
 import forecast
+import orchestrator_bridge
 import tracelog
 
 RUNS = {}
-AGENTS = {"bank": "Nessie", "records": "Records", "matcher": "Matcher", "bookkeeper": "Bookkeeper", "forecast": "Forecaster"}
+AGENTS = {"bank": "Nessie", "records": "Records", "matcher": "Matcher", "bookkeeper": "Bookkeeper", "forecast": "Forecaster",
+          "market": "Market scout", "orchestrator": "Orchestrator"}
 MAX_LOG_LINES = 40              # per script call on the developer page; the rest is counted, not shown
 
 
@@ -116,6 +119,74 @@ def _step(run, step, state, text, **data):
         tracelog.emit(agent, state, text, run.id, ms, step=step, **{k: v for k, v in data.items() if k != "forecast"})
 
 
+def _orchestrate(run):
+    """Market scout compares the menu's prices, then the orchestrator suggests changes: its brief, in its own environment.
+    The check's numbers stand whatever happens here, so a failure shows on these two steps and the check still finishes."""
+    _step(run, "market", "working", "Comparing your prices with nearby restaurants' menus")
+    span = tracelog.Span("Orchestrator", "Brief: what is going on, then what to do about it", run.id)
+    scanned = []
+
+    def on_event(e):                             # the scan's result ends Market scout's step and starts the orchestrator's
+        if e.get("kind") != "result" or e.get("tool") != "scan_market" or scanned:
+            return
+        scanned.append(e)
+        counts = e.get("counts") or {}
+        if e.get("error") or not counts:
+            _check(run, "market", "fail", f"The price scan stopped: {e.get('error') or 'no result'}")
+            _step(run, "market", "waiting", "Couldn't compare prices this time")
+        else:
+            below, at, above, thin = (counts[k] for k in ("below_market", "at_par", "above_market", "insufficient_data"))
+            _check(run, "market", "pass", f"Compared {below + at + above} dishes with nearby restaurants' own menus")
+            _check(run, "market", "warn" if below else "pass", f"{below} below market, {at} at market, {above} above")
+            if thin:
+                _check(run, "market", "pending", f"{thin} dishes have too few nearby prices to compare")
+            _step(run, "market", "done", f"{below} dishes are priced below market, {above} above", counts=counts)
+        _step(run, "orchestrator", "working", "Looking for changes that help your cash")
+
+    try:
+        plan = orchestrator_bridge.plan(orchestrator_bridge.run("brief", run.id, on_event=on_event))
+    except Exception as e:                       # OrchestratorError, or uv itself missing
+        span.fail(f"Brief stopped: {str(e)[:200]}")
+        if not scanned:
+            _step(run, "market", "waiting", "Market scout didn't run")
+        _step(run, "orchestrator", "waiting", f"The orchestrator couldn't run: {str(e)[:200]}")
+        return
+    stage = (plan.get("stage") or {}).get("stage")
+    if stage and stage != "Suggest":             # the orchestrator's gates: no scan or fixes before the owner's review
+        why = (plan["stage"].get("why") or "").rstrip(".")
+        if not scanned:
+            _step(run, "market", "waiting", "Price comparison opens after the owner's review is committed")
+        if plan["cash_cents"] is not None:
+            _check(run, "orchestrator", "pass", f"${plan['cash_cents'] / 100:,.2f} in the bank on {_day(plan['as_of'])}")
+        _check(run, "orchestrator", "pending", f"Stage: {stage}. {why}")
+        run.emit(type="plan", plan=plan)
+        span.done(f"Stage {stage}: waiting for the owner's review")
+        _step(run, "orchestrator", "done", f"Waiting for the owner's review of the findings (stage: {stage})")
+        return
+    if not scanned:
+        _step(run, "market", "waiting", "Market scout didn't run")
+        _step(run, "orchestrator", "working", "Looking for changes that help your cash")
+    if plan["market"] and plan["market"]["offline"]:
+        _check(run, "market", "pass", "Read the saved copies of their menu pages, so nothing was fetched")
+    if plan["cash_cents"] is not None:
+        _check(run, "orchestrator", "pass", f"${plan['cash_cents'] / 100:,.2f} in the bank on {_day(plan['as_of'])}")
+    if plan["bills"]:
+        b = plan["bills"]
+        _check(run, "orchestrator", "pass", f"{b['count']} bills due by {_day(b['before'])}, ${b['total_cents'] / 100:,.2f} in all")
+    fixes = plan["fixes"]
+    for fx in fixes:
+        _check(run, "orchestrator", "pass", f"{fx['title']}: cash lasts {fx['days_later']:g} days longer on average")
+    if fixes:
+        _check(run, "orchestrator", "pass", "Changes dry-ran each one and saved it for your approval; nothing was applied")
+        _check(run, "orchestrator", "pending", "You approve each change at your terminal, with the owner passphrase")
+    else:
+        _check(run, "orchestrator", "pass", "No change the forecast supports right now")
+    run.emit(type="plan", plan=plan)
+    span.done(f"Suggested {len(fixes)} change{'' if len(fixes) == 1 else 's'}")
+    _step(run, "orchestrator", "done", f"Suggested {len(fixes)} change{'' if len(fixes) == 1 else 's'} that help your cash"
+          if fixes else "No change helps your cash right now", fixes=len(fixes))
+
+
 def _execute(run, upload):
     check = tracelog.Span("Pipeline", f"Check started from {'your upload' if upload else 'the sample books'}", run.id)
     try:
@@ -194,6 +265,7 @@ def _execute(run, upload):
         likely = base["runout"]["likely"]
         _check(run, "forecast", "warn" if likely else "pass", f"Likely out of cash {_day(likely)}" if likely else "Cash lasts beyond two years")
         _step(run, "forecast", "done", f"Ran 1,000 futures in {base['runtime_ms'] / 1000:.1f} s", forecast=base)
+        _orchestrate(run)
         run.emit(type="done")
         check.done(f"Check finished in {time.time() - run.t0:.1f} s")
     except Exception as e:                       # the dashboard shows which step stopped and why
