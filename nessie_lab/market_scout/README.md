@@ -45,7 +45,7 @@ uv run --project market_scout market-scout run --request-id demo-2 --items "Marg
 uv run --project market_scout market-scout run --request-id demo-3 --refresh  # re-fetch menus saved more than 6 h ago
 uv run --project market_scout market-scout run --request-id demo-4 --as-of 2026-11-01   # our menu on that date
 uv run --project market_scout market-scout show data/market_reports/M-<id>.json
-uv run --project market_scout market-scout serve --local-only                 # uAgent on 127.0.0.1:8003
+uv run --project market_scout market-scout serve --local-only                 # uAgent on 127.0.0.1:8006
 uv run --project market_scout market-scout client --target agent1... --request-id chat-1
 ```
 
@@ -63,7 +63,7 @@ than 5 requests from one sender in 10 minutes) and `"busy"` (a scan is already r
 
 ## Calling the scout from the orchestrator
 
-The scout listens on port **8003** (`http://127.0.0.1:8003/submit`) and speaks the Agent Chat Protocol: send one
+The scout listens on port **8006** (`http://127.0.0.1:8006/submit`; 8003 is the Bookkeeper Verifier's default) and speaks the Agent Chat Protocol: send one
 `ChatMessage` whose text is a `MarketRequest` as JSON; you get a `ChatAcknowledgement`, then one `ChatMessage` with
 the reply JSON and an `end-session` part. Its address is printed at startup (it follows from `MARKET_SCOUT_SEED`).
 
@@ -77,7 +77,7 @@ MARKET_SCOUT_PEERS=agent1<orchestrator address>=http://127.0.0.1:8005/submit
 uv run --project market_scout market-scout serve            # add --offline for the demo
 ```
 
-On the orchestrator, resolve the scout with `RulesBasedResolver({"agent1<scout address>": "http://127.0.0.1:8003/submit"})`.
+On the orchestrator, resolve the scout with `RulesBasedResolver({"agent1<scout address>": "http://127.0.0.1:8006/submit"})`.
 `MARKET_SCOUT_PEERS` is comma-separated `address=endpoint` pairs. Being a peer grants nothing: a peer that is not in
 `MARKET_SCOUT_ALLOWED_SENDERS` is refused ("sender not allowed"), and peers are never added to the allowlist
 (a startup warning names any peer that is missing from it). Each address must start with `agent1` and each endpoint

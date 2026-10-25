@@ -14,9 +14,11 @@ def _when(d) -> str:
     return d if d else "beyond the forecast horizon"
 
 
-def brief(session: Session, max_fixes: int = 3, propose: bool = True) -> dict:
-    """-> {"text": str, "facts": dict, "suggestions": [paths]}. propose=False (a chat user who is not the owner):
-    facts only, no suggestion is written."""
+def brief(session: Session, max_fixes: int = 3, propose: bool = True, scan: dict | None = None,
+          read_only_note: str | None = None) -> dict:
+    """-> {"text": str, "facts": dict, "suggestions": [paths]}. propose=False (a chat user who is not the owner, or a
+    read-only GET /api/brief): facts only, no suggestion is written. scan: a scan_market result this turn already
+    logged (the served orchestrator asks the Market scout agent first); else the in-process scan runs."""
     lines, facts = [], {}
     cash = tools.call(session, "get_cash_position", {})
     facts["cash"] = cash
@@ -62,16 +64,24 @@ def brief(session: Session, max_fixes: int = 3, propose: bool = True) -> dict:
         lines.append("Bookkeeper: no Bookkeeper report yet, so the books are not reviewed; the forecast uses the bank "
                      "history as it stands.")
     else:
-        lines.append(f"Bookkeeper ({findings['report']}): {len(findings['findings'])} finding(s), each waiting for the "
-                     "owner to confirm (interim checks until the verifier exists):")
+        checks = {c["ref"]: c["status"] for c in findings.get("checks") or []}
+        per = (findings.get("verification") or {}).get("per_finding") or {}
+        label = findings.get("verification_label") or "not verified"
+        waiting = sum(1 for f in findings["findings"] if checks.get(f["finding_id"]) == "downgrade")
+        lines.append(f"Bookkeeper ({findings['report']}, {label}): {len(findings['findings'])} finding(s), "
+                     f"{waiting} awaiting your review (accept, dismiss or revise); until then only cautious "
+                     "adjustments are in the forecast:")
+        info = {"agreed": "Verifier agreed", "replaced": "Verifier's version", "verifier_only": "found by the Verifier"}
         for f in findings["findings"]:
-            lines.append(f"  - {f['finding_id']}: {f['root_cause']} ({f['amount_at_issue_usd']} at issue)")
+            tag = info.get(per.get(f["finding_id"]), "not verified")
+            lines.append(f"  - {f['finding_id']}: {f['root_cause']} ({f['amount_at_issue_usd']} at issue; {tag})")
         if findings.get("coverage_note"):
             lines.append(f"  Coverage: {findings['coverage_note']}.")
         if findings.get("rejected"):
             lines.append(f"  Not used: {', '.join(sorted(findings['rejected']))}.")
 
-    scan = tools.call(session, "scan_market", {})
+    if not (isinstance(scan, dict) and "error" not in scan and "positions" in scan):
+        scan = tools.call(session, "scan_market", {})
     facts["market"] = scan
     if "error" in scan:
         lines.append(f"Market: not available ({scan['error']}).")
@@ -89,7 +99,7 @@ def brief(session: Session, max_fixes: int = 3, propose: bool = True) -> dict:
     fixes = propose_fixes(session, max_fixes=max_fixes) if propose else []
     facts["fixes"] = fixes
     if not propose:
-        lines.append("Fixes: I propose changes only for the owner; ask the owner.")
+        lines.append(read_only_note or "Fixes: I propose changes only for the owner; ask the owner.")
     elif fixes:
         lines.append("Fixes for the owner (each checked with CH's dry run; nothing changes until you approve):")
         for i, fx in enumerate(fixes, 1):

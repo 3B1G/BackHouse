@@ -63,13 +63,18 @@ def call(session, name, args):
     return result
 
 
-def brief(session):
+BRIEFS: list[dict] = []
+
+
+def brief(session, **kw):
+    BRIEFS.append(kw)
     return {"text": "Cash is $12,345.56 as of 2026-10-24. Likely run-out 2027-03-14.",
             "facts": {"balance_cents": 1234556}, "suggestions": []}
 
 
 def install(monkeypatch):
     CALLS.clear()
+    BRIEFS.clear()
     for name, attrs in {"session": {"Session": Session}, "tools": {"TOOLS": TOOLS, "call": call},
                         "brief": {"brief": brief}}.items():
         module = types.ModuleType(f"orchestrator.{name}")

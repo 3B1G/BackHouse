@@ -91,7 +91,8 @@ def test_baseline_full_ingest(session):
     out = S.ingest(session.root, put(session.root, BASE))
     state = S.load(session.root)
     assert out == {"noop": False, "report_id": "R-base", "mode": "full", "new": 4, "updated": 0, "closed": 0,
-                   "not_rereported": 0, "covered_through": "2026-10-20"}
+                   "not_rereported": 0, "covered_through": "2026-10-20", "verified": False, "rounds": None,
+                   "verification": "not verified"}
     assert state["baseline"] == {"report_id": "R-base", "filename": "R-base.json", "as_of": "2026-10-20",
                                  "window": {"start": "2025-10-27", "end": "2026-10-20"}}
     assert S.counts(state)["open"] == 4 and state["reports"][0]["mode"] == "full"

@@ -14,7 +14,7 @@ from orchestrator.brief import brief
 from orchestrator.session import Session
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "orchestrator"
-CORE = ["env.py", "session.py", "fmt.py", "tools.py", "controller.py", "brief.py", "checks_interim.py", "cli.py"]
+CORE = ["env.py", "session.py", "fmt.py", "tools.py", "controller.py", "brief.py", "checks_interim.py", "checks_bk.py", "api.py", "cli.py"]
 MONEY = re.compile(r"-?\$\d[\d,]*\.\d{2}")
 
 

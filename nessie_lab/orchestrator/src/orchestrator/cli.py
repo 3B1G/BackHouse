@@ -1,17 +1,22 @@
 """CLI. Offline by default for every command (the Market scout reads saved menu pages only); --online lets it fetch.
+Every command runs IN-PROCESS unless --agents is given: then it goes through the running `orchestrator serve`, which
+delegates to the Market scout and Bookkeeper agents (SCOUT_ADDR / BOOKKEEPER_ADDR) and falls back in-process,
+marked degraded.
 
-  orchestrator brief [--root DIR] [--online] [--as-of YYYY-MM-DD] [--json]
+  orchestrator brief [--root DIR] [--online] [--as-of YYYY-MM-DD] [--json] [--agents]
   orchestrator tools                                   the tools and their parameters
   orchestrator call <tool> '<json args>'               or a path to a JSON file (PowerShell 5.1 mangles quotes)
   orchestrator suggestions                             data/suggestions/*.json
   orchestrator ask "<question>"                        orchestrator.turn (LLM); falls back to the brief
-  orchestrator ask --server [--port 8005] "<question>"  the same, through a running `serve` (POST /ask with the
-                                                       bearer token from data/orchestrator/rest_token)
-  orchestrator serve                                   orchestrator.agent (uAgent), when it exists
+  orchestrator ask --server|--agents [--port 8005] "<question>"  the same, through a running `serve` (POST /ask
+                                                       with the bearer token from data/orchestrator/rest_token)
+  orchestrator serve                                   orchestrator.agent (uAgent)
+  orchestrator api-schema --out docs/api_schema.json   the frontend API's JSON Schemas and endpoint list
 
-The Bookkeeper (the owner's operations; no LLM tool runs them):
-  orchestrator bookkeeper-setup [--as-of D] [--timeout 1800] [--force]   the one-time full backfill
-  orchestrator bookkeeper-update [--timeout 600]       only the newest days (delta), or a full rerun diffed
+The Bookkeeper (the owner's operations; no LLM tool runs them). A run is two investigations (the Bookkeeper and its
+Verifier) and returns one verified report:
+  orchestrator bookkeeper-setup [--as-of D] [--timeout 3600] [--force] [--agents]   the one-time full backfill
+  orchestrator bookkeeper-update [--timeout 1200] [--agents]   only the newest days (delta), or a full rerun diffed
   orchestrator bookkeeper-ingest <data/reports/R-*.json>   merge a report the Bookkeeper owner made by hand
   orchestrator bookkeeper-status                       baseline, covered through, days behind, finding counts
 
@@ -90,12 +95,56 @@ def _ask_server(root: Path, port: int, question: str, transport=None) -> int:
     return 0
 
 
+def _bookkeeper_server(root: Path, port: int, op: str, force: bool, timeout, transport=None) -> int:
+    """POST /bookkeeper on this machine's running agent (it delegates to the Bookkeeper agent). Token never printed."""
+    import httpx
+
+    from . import bk_runner as R
+    from .agent import read_rest_token
+
+    token = read_rest_token(root)
+    if not token:
+        print(f"bookkeeper-{op} --agents: no data/orchestrator/rest_token; start `orchestrator serve` first")
+        return 1
+    limit = float(timeout or (R.SETUP_TIMEOUT if op == "setup" else R.UPDATE_TIMEOUT))
+    print(f"bookkeeper-{op} --agents: asking the running orchestrator (it delegates to the Bookkeeper agent; up to "
+          f"{int(limit)} s)")
+    try:
+        with httpx.Client(transport=transport, trust_env=False, timeout=limit + 120) as http:
+            r = http.post(f"http://127.0.0.1:{int(port)}/bookkeeper",
+                          json={"op": op, "force": bool(force), "timeout": timeout},
+                          headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError as exc:
+        print(f"bookkeeper-{op} --agents: could not reach 127.0.0.1:{port} ({type(exc).__name__})")
+        return 1
+    if r.status_code != 200:
+        print(f"bookkeeper-{op} --agents: HTTP {r.status_code}")
+        return 1
+    out = r.json()
+    for note in out.get("notes") or []:
+        print(f"note: {note}")
+    if out.get("status") in ("error", "busy"):
+        print(f"bookkeeper-{op}: {out.get('error')}")
+        return 1
+    detail = out.get("detail") or {}
+    if out.get("status") == "up_to_date":
+        print(f"Bookkeeper is up to date: covers through {detail.get('covered_through')}.")
+    elif out.get("status") == "exists":
+        print("Bookkeeper baseline exists. Nothing to do: use `orchestrator bookkeeper-update`, or --force.")
+    else:
+        print(_ingest_text(detail))
+    return 0
+
+
 def _bookkeeper(session, args) -> int:
     """bookkeeper-setup / -update / -ingest / -status. Errors are one clear line and exit 1."""
     from . import bk_runner as R
     from . import bk_state as S
 
     root, tag = session.root, session.tag
+    if getattr(args, "agents", False) and args.command in ("bookkeeper-setup", "bookkeeper-update"):
+        op = "setup" if args.command == "bookkeeper-setup" else "update"
+        return _bookkeeper_server(root, args.port, op, getattr(args, "force", False), args.timeout)
     try:
         if args.command == "bookkeeper-status":
             view = S.status_view(S.load(root, recover=False), R.latest_bank_date(root, tag))
@@ -109,7 +158,8 @@ def _bookkeeper(session, args) -> int:
             print(_ingest_text(out))
             return 0
         if args.command == "bookkeeper-setup":
-            out = R.setup(root, as_of=args.bk_as_of, timeout=args.timeout, force=args.force, tag=tag, progress=print)
+            out = R.setup(root, as_of=args.bk_as_of, timeout=args.timeout or R.SETUP_TIMEOUT, force=args.force,
+                          tag=tag, progress=print)
             if out["status"] == "exists":
                 print(f"Bookkeeper baseline exists ({out['baseline']['filename']}, as of {out['baseline']['as_of']}; "
                       f"covers through {out['covered_through']}). Nothing to do: use `orchestrator bookkeeper-update`, "
@@ -118,7 +168,7 @@ def _bookkeeper(session, args) -> int:
             print(_ingest_text(out))
             print(f"Backfill done in {out['seconds']} s.")
             return 0
-        out = R.update(root, timeout=args.timeout, tag=tag, progress=print)
+        out = R.update(root, timeout=args.timeout or R.UPDATE_TIMEOUT, tag=tag, progress=print)
         if out["status"] == "up_to_date":
             print(f"Bookkeeper is up to date: covers through {out['covered_through']} (latest bank date "
                   f"{out['latest_bank_date']}).")
@@ -134,9 +184,10 @@ def _bookkeeper(session, args) -> int:
 def _ingest_text(out: dict) -> str:
     if out.get("noop"):
         return f"{out['report_id']}: already ingested; nothing changed (covers through {out['covered_through']})."
-    return (f"Ingested {out['report_id']} ({out['mode']}): {out['new']} new, {out['updated']} updated, "
+    text = (f"Ingested {out['report_id']} ({out['mode']}): {out['new']} new, {out['updated']} updated, "
             f"{out['closed']} closed, {out['not_rereported']} not re-reported. Covers through "
             f"{out['covered_through']}.")
+    return text + (f" Report: {out['verification']}." if out.get("verification") else "")
 
 
 def _status_text(v: dict) -> str:
@@ -153,6 +204,11 @@ def _status_text(v: dict) -> str:
              f"as of {last.get('as_of')}, ingested {last.get('ingested_at')})",
              f"Incremental:     Bookkeeper delta mode {'seen' if v['delta_capable'] else 'not seen yet'}; "
              f"ORCHESTRATOR_BK_INCREMENTAL={'1' if v['incremental_requests'] else 'off'}"]
+    if v.get("verification"):
+        vc = v["verification"]
+        lines.append(f"Verified:        last run {v.get('last_run_verification')}; open findings: "
+                     f"{vc.get('agreed', 0)} agreed, {vc.get('replaced', 0)} replaced, "
+                     f"{vc.get('verifier_only', 0)} Verifier-only, {vc.get('unverified', 0)} unverified")
     lines += [f"Note:            {n}" for n in v.get("notes") or []]
     if v["days_behind"]:
         lines.append("Run `orchestrator bookkeeper-update` to catch up.")
@@ -170,6 +226,8 @@ def main(argv=None):
     b.add_argument("--json", action="store_true")
     b.add_argument("--root", type=Path, dest="root_after", default=None)        # also accepted after `brief`
     b.add_argument("--online", action="store_true", dest="online_after")
+    b.add_argument("--agents", action="store_true", help="through the running serve (delegates to the agents)")
+    b.add_argument("--port", type=int, default=8005)
     sub.add_parser("tools")
     c = sub.add_parser("call")
     c.add_argument("tool")
@@ -178,15 +236,22 @@ def main(argv=None):
     a = sub.add_parser("ask")
     a.add_argument("question")
     a.add_argument("--server", action="store_true", help="ask the running agent (POST /ask) instead of in-process")
+    a.add_argument("--agents", action="store_true", help="the same as --server: the served turn delegates")
     a.add_argument("--port", type=int, default=8005)
     sub.add_parser("serve")
+    sc = sub.add_parser("api-schema", help="write the HTTP API's JSON Schemas and endpoint list")
+    sc.add_argument("--out", type=Path, default=None, help="file to write (default: print)")
     bs = sub.add_parser("bookkeeper-setup", help="the one-time full Bookkeeper backfill (minutes, ~20 ASI calls)")
     bs.add_argument("--as-of", dest="bk_as_of", type=date.fromisoformat, default=None,
                     help="cutoff (default and maximum: the latest bank date)")
-    bs.add_argument("--timeout", type=float, default=1800)
+    bs.add_argument("--timeout", type=float, default=None, help="seconds (default 3600: two investigations)")
     bs.add_argument("--force", action="store_true", help="run again even though a baseline exists")
-    bu = sub.add_parser("bookkeeper-update", help="bring the Bookkeeper state up to the latest bank date")
-    bu.add_argument("--timeout", type=float, default=600)
+    for parser in (bs, bu := sub.add_parser("bookkeeper-update", help="bring the Bookkeeper state up to the latest "
+                                                                      "bank date")):
+        parser.add_argument("--agents", action="store_true",
+                            help="through the running serve, which delegates to the Bookkeeper agent")
+        parser.add_argument("--port", type=int, default=8005)
+    bu.add_argument("--timeout", type=float, default=None, help="seconds (default 1200)")
     bi = sub.add_parser("bookkeeper-ingest", help="merge one Bookkeeper report (data/reports/R-*.json)")
     bi.add_argument("path")
     st = sub.add_parser("bookkeeper-status")
@@ -228,8 +293,20 @@ def main(argv=None):
         return 0
     if args.command.startswith("bookkeeper-"):
         return _bookkeeper(session, args)
-    if args.command == "ask" and args.server:
+    if args.command == "api-schema":
+        from .api import schema
+        text = json.dumps(schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.out:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(text, encoding="utf-8")
+            print(f"wrote {args.out}")
+        else:
+            print(text, end="")
+        return 0
+    if args.command == "ask" and (args.server or args.agents):
         return _ask_server(session.root, args.port, args.question)
+    if args.command == "brief" and getattr(args, "agents", False):
+        return _ask_server(session.root, args.port, "brief")
     if args.command == "ask":
         try:
             turn = importlib.import_module("orchestrator.turn")

@@ -7,7 +7,12 @@ them) are merged into it, so the forecast keeps the earlier context and an updat
      reports: [{report_id, filename, sha256, as_of, mode, window, capabilities, ingested_at,
                 findings_new, findings_closed, findings_not_rereported}],
      covered_through: date,
-     findings: {key: {finding, status, first_seen, last_seen, last_report_id, rereported, note?}}}
+     findings: {key: {finding, status, first_seen, last_seen, last_report_id, rereported, note?, verification?}}}
+
+Each finding carries what the Bookkeeper's Verifier said about it in the report that last listed it
+(bk_adapter.verified_status): verification = {"status": "agreed"|"replaced"|"verifier_only"|"unverified", "rounds",
+"report_id"}. The merged open set keeps it (open_verification), as information shown to the owner, who decides
+each finding; a Verifier agreement never passes a finding by itself (checks_bk). A later unverified report that re-lists a finding replaces its status with "unverified".
 
 Finding ids are renumbered on every run, so findings are matched by bk_adapter.finding_key (and, failing that, by
 root cause plus overlapping bank ids). Statuses: open (used by the forecast), not_rereported (a later FULL run
@@ -33,6 +38,7 @@ REPORT_NAME = re.compile(r"^R-[A-Za-z0-9._-]+\.json$")
 LOCK_STALE_SECONDS = 300
 LOCK_WAIT_SECONDS = 10
 OPEN, NOT_REREPORTED = "open", "not_rereported"
+UNVERIFIED = "unverified"
 MAX_REPORT_BYTES = 20_000_000
 
 
@@ -192,7 +198,7 @@ def read_report(path: Path) -> tuple[dict, str]:
         raise StateError(f"{path.name} is not JSON") from None
     problems = A.validate_report(report)
     if problems:
-        raise StateError(f"{path.name} is not a schema-1.1 Bookkeeper report: {'; '.join(problems[:5])}")
+        raise StateError(f"{path.name} is not a schema-1.1/1.2 Bookkeeper report: {'; '.join(problems[:5])}")
     return report, hashlib.sha256(raw).hexdigest()
 
 
@@ -239,8 +245,11 @@ def ingest(root, report_path, baseline: bool | None = None) -> dict:
         elif covered and end < covered:
             raise StateError(f"{path.name} covers through {end}, older than the state ({covered}); not ingested")
 
+        vs = A.verified_status(report)
         seen, new, updated, closed, dropped, taken = set(), 0, 0, 0, 0, set()
         for f in report["findings"]:
+            verification = {"status": vs["per_finding"].get(str(f.get("id")), UNVERIFIED) if vs["verified"]
+                            else UNVERIFIED, "rounds": vs["rounds"], "report_id": rid}
             key = _match(state, f, taken)
             taken.add(key)
             seen.add(key)
@@ -250,13 +259,15 @@ def ingest(root, report_path, baseline: bool | None = None) -> dict:
                 new += 1 if st == OPEN else 0
                 closed += 1 if st != OPEN else 0
                 state["findings"][key] = {"finding": f, "status": st, "first_seen": as_of.isoformat(),
-                                          "last_seen": as_of.isoformat(), "last_report_id": rid, "rereported": True}
+                                          "last_seen": as_of.isoformat(), "last_report_id": rid, "rereported": True,
+                                          "verification": verification}
                 continue
             if st != OPEN and entry["status"] not in A.CLOSED_STATUSES:
                 closed += 1
             else:
                 updated += 1
-            entry.update(finding=f, status=st, last_seen=as_of.isoformat(), last_report_id=rid, rereported=True)
+            entry.update(finding=f, status=st, last_seen=as_of.isoformat(), last_report_id=rid, rereported=True,
+                         verification=verification)
             entry.pop("note", None)
         if not delta:                                     # a full snapshot: what it doesn't list is no longer open
             for key, entry in state["findings"].items():
@@ -272,11 +283,14 @@ def ingest(root, report_path, baseline: bool | None = None) -> dict:
         state["reports"].append({"report_id": rid, "filename": path.name, "sha256": sha, "as_of": as_of.isoformat(),
                                  "mode": "delta" if delta else "full", "window": window,
                                  "capabilities": A.capabilities(report), "ingested_at": _today_utc(),
+                                 "verified": vs["verified"], "rounds": vs["rounds"],
                                  "findings_new": new, "findings_closed": closed,
                                  "findings_not_rereported": dropped})
         save(root, state)
     return {"noop": False, "report_id": rid, "mode": "delta" if delta else "full", "new": new, "updated": updated,
-            "closed": closed, "not_rereported": dropped, "covered_through": state["covered_through"]}
+            "closed": closed, "not_rereported": dropped, "covered_through": state["covered_through"],
+            "verified": vs["verified"], "rounds": vs["rounds"],
+            "verification": A.verification_label(vs["verified"], vs["rounds"])}
 
 
 # ---------------------------------------------------------------- what the rest of the orchestrator reads
@@ -300,9 +314,32 @@ def short_ids(keys) -> dict[str, str]:
     return {k: k[:n] for k in keys}
 
 
+def _verification(entry: dict) -> dict:
+    v = entry.get("verification")
+    if not isinstance(v, dict) or v.get("status") not in (A.AGREED, A.REPLACED, A.VERIFIER_ONLY, UNVERIFIED):
+        return {"status": UNVERIFIED, "rounds": None, "report_id": entry.get("last_report_id")}
+    return v
+
+
+def open_verification(state: dict) -> dict[str, dict]:
+    """{merged id (as in open_findings_report): {"status", "rounds", "report_id"}} for the OPEN findings: what the
+    Verifier said, shown to the owner. It comes from the state file, never from a report file."""
+    entries = open_entries(state)
+    ids = short_ids(k for k, _ in entries)
+    return {ids[k]: _verification(e) for k, e in entries}
+
+
+def verification_counts(state: dict) -> dict:
+    out = {A.AGREED: 0, A.REPLACED: 0, A.VERIFIER_ONLY: 0, UNVERIFIED: 0}
+    for _, e in open_entries(state):
+        out[_verification(e)["status"]] += 1
+    return out
+
+
 def open_findings_report(state: dict) -> dict:
     """A synthetic schema-1.1-shaped report of the OPEN findings only, ids namespaced as key[:10], summary totals
-    recomputed. This is what contracts.from_bk_report consumes."""
+    recomputed. This is what contracts.from_bk_report consumes. Its own verification block says "unverified": the
+    per-finding Verifier status travels separately (open_verification)."""
     entries = open_entries(state)
     ids = short_ids(k for k, _ in entries)
     findings = [{**A.clean_finding(e["finding"]), "id": ids[k]} for k, e in entries]
@@ -331,9 +368,15 @@ def status_view(state: dict | None, latest: date | None) -> dict:
     return {"available": True, "baseline": state["baseline"], "covered_through": state["covered_through"],
             "latest_bank_date": latest.isoformat() if latest else None, "days_behind": behind,
             "up_to_date": behind == 0, "findings": counts(state), "reports_ingested": len(state["reports"]),
-            "last_run": None if last is None else {k: last[k] for k in ("report_id", "filename", "as_of", "mode",
-                                                                        "ingested_at", "findings_new",
-                                                                        "findings_closed", "findings_not_rereported")},
+            "last_run": None if last is None else {k: last.get(k) for k in ("report_id", "filename", "as_of", "mode",
+                                                                            "ingested_at", "findings_new",
+                                                                            "findings_closed",
+                                                                            "findings_not_rereported", "verified",
+                                                                            "rounds")},
             "delta_capable": bool(last and last.get("capabilities", {}).get("delta")),
+            "verification": verification_counts(state),
+            "last_run_verified": bool(last and last.get("verified")),
+            "last_run_verification": A.verification_label(bool(last and last.get("verified")),
+                                                          (last or {}).get("rounds")),
             "incremental_requests": A.incremental_enabled(),
             "notes": list(state.get("notes") or [])}

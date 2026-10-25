@@ -168,22 +168,44 @@ def _today():
     return datetime.now(ZoneInfo("America/Los_Angeles")).date()
 
 
+async def prefetch_scan(session, dispatch, stop: Deadline | None = None):
+    """The served orchestrator delegates the brief's market scan to the Market scout agent: (scan or None, notes,
+    degraded). Only with a PeerDispatch that has a scout address; it falls back in-process (degraded) itself."""
+    if not getattr(dispatch, "scout", None):
+        return None, [], False
+    remaining = stop.remaining() if stop is not None else float(DEADLINE)
+    if remaining < 10:
+        return None, ["market scout skipped: not enough time left"], False
+    try:
+        scan = await asyncio.wait_for(dispatch(session, "scan_market", {}), remaining - 5)
+    except Exception as exc:                              # the brief then scans in-process
+        return None, [f"degraded: market scout failed ({type(exc).__name__}); scanned in-process"], True
+    notes = list(getattr(dispatch, "notes", None) or [])
+    if isinstance(scan, dict) and "error" not in scan:
+        return scan, notes, bool(getattr(dispatch, "degraded", False))
+    return None, notes, bool(getattr(dispatch, "degraded", False))
+
+
 async def from_brief(session, notes, degraded, stop: Deadline | None = None, owner: bool = True,
-                     cache: dict | None = None) -> dict:
+                     cache: dict | None = None, dispatch=None) -> dict:
     """The deterministic brief, inside what is left of the turn's deadline. owner=False: no suggestions, and the
-    text is cached per (root, day) in `cache` so a crowd of chat users costs one brief a day."""
+    text is cached per (root, day) in `cache` so a crowd of chat users costs one brief a day. dispatch: a
+    PeerDispatch (the served orchestrator): the market scan goes to the Market scout agent first."""
     key = None
     if not owner and cache is not None:
         key = (str(getattr(session, "root", "")), _today().isoformat())
         if key in cache:
             return _result(cache[key], session, degraded, [*notes, "brief: today's cached copy"])
+    scan, more, worse = await prefetch_scan(session, dispatch, stop)
+    notes, degraded = [*notes, *more], degraded or worse
     remaining = stop.remaining() if stop is not None else float(DEADLINE)
     if remaining < 1:
         return _result("I ran out of time before I could build the brief. Ask again in a moment.", session, True,
                        [*notes, "deadline reached before the brief"])
     fn = _core("brief").brief
+    extra = {"scan": scan} if scan is not None else {}
     try:
-        work = (lambda: fn(session)) if owner else (lambda: fn(session, propose=False))
+        work = (lambda: fn(session, **extra)) if owner else (lambda: fn(session, propose=False, **extra))
         b = await asyncio.wait_for(asyncio.to_thread(work), remaining)
         text = _brief_text(b) or "No brief is available yet."
         if key is not None and _brief_text(b):
@@ -252,12 +274,13 @@ async def _turn(session, user_text, llm, dispatch, stop: Deadline, owner: bool, 
     if not text:
         return _result("Ask me about cash, bills, the menu, findings or the forecast.", session, notes=["empty"])
     if BRIEF_INTENT.match(text):
-        return await from_brief(session, ["answered from the deterministic brief"], False, stop, owner, brief_cache)
+        return await from_brief(session, ["answered from the deterministic brief"], False, stop, owner, brief_cache,
+                                dispatch)
     if llm is None:
         llm = ASIClient()
     if not getattr(llm, "available", False):
         return await from_brief(session, ["ASI:One unavailable (no API key); showing the deterministic brief"], True,
-                                stop, owner, brief_cache)
+                                stop, owner, brief_cache, dispatch)
     notes, counts = [], {}
     kw = {"dispatch": dispatch, "counts": counts}
     if not owner:

@@ -1,7 +1,7 @@
-"""STAND-IN for checks.py, the teammate's verifier, which doesn't exist yet. Replace `check_findings` with the real
-verifier once it lands; nothing else in the orchestrator needs to change.
+"""The INTERIM rule. tools no longer uses this module: checks_bk applies the same rule ("downgrade" every finding)
+while the owner has not decided, and the owner's accept / dismiss / revise once they have.
 
-Until then no finding is verified, so every one is downgraded to the owner (status "downgrade"). Through
+Under this rule no finding is verified, so every one is downgraded to the owner (status "downgrade"). Through
 contracts.passed_adjustments that means only CAUTIOUS adjustments (money still owed, an overcharge that keeps costing)
 reach the Forecaster, never as recoverable, and nothing that would make the forecast rosier (excluding or correcting
 a bank row) is used."""

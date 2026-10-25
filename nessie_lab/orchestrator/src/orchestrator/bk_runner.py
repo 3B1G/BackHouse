@@ -4,11 +4,23 @@ The Bookkeeper runs only from its own uv project (nessie_lab/bookkeeper), so it 
 
     <uv> run --project <nessie_lab>/bookkeeper bookkeeper --root <root> run --request-id <id> --as-of <date> --tag <tag>
 
-(run from nessie_lab/). It prints its ReportResult as JSON, whose `filename` names data/reports/R-*.json. A run
-takes several minutes (up to ~15) and ~20 ASI calls, needs ASI1_API_KEY, and does one job at a time; a run lock
+(run from nessie_lab/). Since bk 872f15e a run is TWO investigations: the Bookkeeper drafts the report, then its
+own Verifier repeats the investigation independently, compares, sends disagreements back for revision rounds, and
+publishes ONE verified report (schema 1.2). That is ~40 ASI calls plus revisions and can take most of an hour, so the
+timeouts are SETUP_TIMEOUT = 3600 s and UPDATE_TIMEOUT = 1200 s. The CLI prints its ReportResult as JSON:
+{request_id, report_id, filename, as_of, verified} (no `status` key on success); `filename` names
+data/reports/R-*.json and is pattern-checked. It needs ASI1_API_KEY and does one job at a time; a run lock
 (data/orchestrator/bookkeeper_run.lock) makes sure the orchestrator never starts two.
 
-Inside the running uAgent, agent mode (BOOKKEEPER_ADDR, a PeerDispatch) can carry the request instead.
+A transport failure with a trace id is retried once with `bookkeeper resume --trace-id TR-...`, which now also runs
+the Verifier, so the filename it prints is the final, published report. On a timeout the message names the report
+the run may still publish, and `bookkeeper verify --report-id R-...` for a draft that was saved but not verified.
+
+Inside the running uAgent (`orchestrator serve` with BOOKKEEPER_ADDR set) the request goes to the Bookkeeper agent
+instead (asetup / aupdate, by default; ORCHESTRATOR_USE_AGENTS=0 turns it off). Its reply is the same ReportResult,
+or {request_id, status: "error", error, error_type, trace_id}, which raises BookkeeperError. A Bookkeeper agent that
+fails fast falls back to the subprocess (marked degraded); one that times out does not (it may still be running, and
+a second run would double the ASI calls).
 
 These are the owner's operations (`orchestrator bookkeeper-setup` / `bookkeeper-update`): no LLM tool runs them.
 A turn may run a quick DELTA update first only with ORCHESTRATOR_BK_AUTO=1 and a delta-capable Bookkeeper
@@ -35,7 +47,7 @@ from . import env
 SENDER = "local"                       # the fixed sender: `bookkeeper run` calls Bookkeeper.run(request) (sender "local")
 TRACE_ID = re.compile(r"TR-[a-f0-9]{32}")
 TRANSPORT_HINTS = ("timed out", "Could not reach", "HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504")
-SETUP_TIMEOUT, UPDATE_TIMEOUT = 1800, 600
+SETUP_TIMEOUT, UPDATE_TIMEOUT = 3600, 1200        # two investigations per run now (see above)
 AUTO_MIN_SECONDS, AUTO_RESERVE_SECONDS = 5, 20
 
 
@@ -89,8 +101,9 @@ def command(root, payload: dict, project: Path | None = None, environ=None) -> l
             *A.cli_args(payload)]
 
 
-def _filename(stdout: str) -> str | None:
-    """The ReportResult's `filename` from the CLI's stdout (pretty-printed JSON, possibly after log lines)."""
+def _reply(stdout: str) -> dict | None:
+    """The ReportResult from the CLI's stdout (pretty-printed JSON, possibly after log lines): the first JSON object
+    with a string `filename`."""
     text = stdout or ""
     candidates = [text]
     start = text.find("{")
@@ -103,8 +116,21 @@ def _filename(stdout: str) -> str | None:
         except ValueError:
             continue
         if isinstance(value, dict) and isinstance(value.get("filename"), str):
-            return value["filename"]
+            return value
     return None
+
+
+def _filename(stdout: str) -> str | None:
+    reply = _reply(stdout)
+    return None if reply is None else reply["filename"]
+
+
+def verify_hint(request_id: str, sender: str = SENDER) -> str:
+    """What to run when a draft may be saved but its verification did not finish."""
+    rid = expected_report(request_id, sender)[:-5]
+    return (f"if the Bookkeeper saved its draft but the Verifier did not finish, run `uv run --project bookkeeper "
+            f"bookkeeper verify --report-id {rid}` from nessie_lab/, then `orchestrator bookkeeper-ingest "
+            f"data/reports/{rid}.json`")
 
 
 def _failure(stderr: str) -> str:
@@ -126,11 +152,18 @@ def _report_path(root, filename: str) -> Path:
 
 
 def run_bookkeeper(root, as_of: date | None = None, since: date | None = None, prior: str | None = None,
-                   timeout: float = UPDATE_TIMEOUT, tag: str = "boh-1loc", *, runner=None,
-                   environ=None, project: Path | None = None, progress=None, agent=None) -> Path:
-    """Run the Bookkeeper once and return the report it wrote (data/reports/R-*.json). as_of is clamped to the
-    latest bank date (a later one makes the Bookkeeper raise). `agent`: an async callable(payload) -> reply dict
-    (agent mode), else the subprocess. Raises BookkeeperError with a clear message."""
+                   timeout: float = UPDATE_TIMEOUT, tag: str = "boh-1loc", **kw) -> Path:
+    """Run the Bookkeeper once (draft + its Verifier loop) and return the published report (data/reports/R-*.json).
+    See run_verified for the arguments."""
+    return run_verified(root, as_of, since, prior, timeout, tag, **kw)[0]
+
+
+def run_verified(root, as_of: date | None = None, since: date | None = None, prior: str | None = None,
+                 timeout: float = UPDATE_TIMEOUT, tag: str = "boh-1loc", *, runner=None,
+                 environ=None, project: Path | None = None, progress=None, agent=None) -> tuple[Path, bool | None]:
+    """-> (report path, the reply's `verified`). as_of is clamped to the latest bank date (a later one makes the
+    Bookkeeper raise). `agent`: an async callable(payload) -> reply dict (agent mode), else the subprocess. Raises
+    BookkeeperError with a clear message."""
     environ = dict(os.environ if environ is None else environ)
     runner = runner or tree_run                           # looked up per call, so tests can replace subprocess.run
     say = progress or (lambda *_: None)
@@ -167,11 +200,12 @@ def run_bookkeeper(root, as_of: date | None = None, since: date | None = None, p
                     argv = [*uv_command(environ), "run", "--project", str(project), "bookkeeper", "--root",
                             str(Path(root).resolve()), "resume", "--trace-id", trace.group(0)]
                     out = _run(runner, argv, left, environ, rid)
-                    if out.returncode == 0:
+                    if out.returncode == 0:                 # resume verifies too: this filename is final
                         return _done(root, out, rid)
                     why = _failure(out.stderr)
+            hint = f"; {verify_hint(rid)}" if "erif" in why else ""
             raise BookkeeperError(f"the Bookkeeper run failed: {why}. Run it again (a new request id is used each "
-                                  "time)")
+                                  f"time){hint}")
         return _done(root, out, rid)
 
 
@@ -211,49 +245,85 @@ def _run(runner, argv, timeout, environ, rid):
         return runner(argv, cwd=str(env.NESSIE_LAB), capture_output=True, text=True, encoding="utf-8",
                       errors="replace", timeout=timeout, env=environ)
     except subprocess.TimeoutExpired:
-        raise BookkeeperError(f"the Bookkeeper did not finish within {int(timeout)} s. It may still write "
-                              f"data/reports/{expected_report(rid)}; if it does, run `orchestrator bookkeeper-ingest "
-                              f"data/reports/{expected_report(rid)}`, or retry with a longer --timeout") from None
+        raise BookkeeperError(f"the Bookkeeper did not finish within {int(timeout)} s (a run is two investigations "
+                              f"now). It may still write data/reports/{expected_report(rid)}; if it does, run "
+                              f"`orchestrator bookkeeper-ingest data/reports/{expected_report(rid)}`; "
+                              f"{verify_hint(rid)}; or retry with a longer --timeout") from None
     except FileNotFoundError:
         raise BookkeeperError("could not start uv (set ORCHESTRATOR_BK_UV to the uv command)") from None
 
 
-def _done(root, out, rid) -> Path:
-    filename = _filename(out.stdout)
-    if filename is None:
+def _done(root, out, rid) -> tuple[Path, bool | None]:
+    reply = _reply(out.stdout)
+    if reply is None:
         raise BookkeeperError(f"the Bookkeeper finished but printed no report filename (expected "
                               f"data/reports/{expected_report(rid)})")
-    return _report_path(root, filename)
+    verified = reply.get("verified") if isinstance(reply.get("verified"), bool) else None
+    return _report_path(root, reply["filename"]), verified
 
 
-async def arun_agent(root, agent, payload: dict, timeout: float) -> Path:
+def _clean(text, cap=300) -> str:
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(text or ""))
+    return re.sub(r"(?i)(api[_-]?key|token|bearer)\S*\s*[:=]?\s*\S+", r"\1 <hidden>", text)[:cap]
+
+
+class AgentTimeout(BookkeeperError):
+    """The Bookkeeper agent did not answer in time; it may still be running (so nothing falls back)."""
+
+
+def adopt_reply(root, reply, request_id: str | None = None, sender: str = SENDER) -> tuple[Path, bool | None]:
+    """A Bookkeeper agent reply -> (report path, verified). An error reply ({status: "error", error, trace_id})
+    raises BookkeeperError; a success reply has NO status key: {request_id, report_id, filename, as_of, verified}."""
+    if not isinstance(reply, dict):
+        raise BookkeeperError("the Bookkeeper agent's reply was not a JSON object")
+    if reply.get("status") == "error":
+        trace = TRACE_ID.search(str(reply.get("trace_id") or ""))
+        more = f"; resume it with `bookkeeper resume --trace-id {trace.group(0)}`" if trace else ""
+        if "erif" in str(reply.get("error")) and request_id:
+            more += f"; {verify_hint(request_id, sender)}"
+        raise BookkeeperError(f"the Bookkeeper agent failed: {_clean(reply.get('error')) or 'no detail'}{more}")
+    if request_id and reply.get("request_id") not in (None, request_id):
+        raise BookkeeperError("the Bookkeeper agent replied for another request")
+    if not isinstance(reply.get("filename"), str):
+        raise BookkeeperError("the Bookkeeper agent replied without a report filename")
+    verified = reply.get("verified") if isinstance(reply.get("verified"), bool) else None
+    return _report_path(root, reply["filename"]), verified
+
+
+async def arun_agent(root, agent, payload: dict, timeout: float, sender: str = SENDER) -> tuple[Path, bool | None]:
     """Agent mode on the caller's event loop: send the ReportRequest payload, adopt the report it names."""
     try:
         reply = await asyncio.wait_for(agent(payload), timeout)
     except asyncio.TimeoutError:
-        raise BookkeeperError(f"the Bookkeeper agent did not reply within {int(timeout)} s") from None
-    if not isinstance(reply, dict) or not isinstance(reply.get("filename"), str):
-        raise BookkeeperError("the Bookkeeper agent replied without a report filename")
-    return _report_path(root, reply["filename"])
+        raise AgentTimeout(f"the Bookkeeper agent did not reply within {int(timeout)} s. It may still publish "
+                           f"data/reports/{expected_report(payload['request_id'], sender)}; ingest it with "
+                           f"`orchestrator bookkeeper-ingest`, or "
+                           f"{verify_hint(payload['request_id'], sender)}") from None
+    return adopt_reply(root, reply, payload.get("request_id"), sender)
 
 
-def _via_agent(root, agent, payload, timeout) -> Path:
+def _via_agent(root, agent, payload, timeout) -> tuple[Path, bool | None]:
     return asyncio.run(arun_agent(root, agent, payload, timeout))       # sync callers only (no running loop)
 
 
 # ---------------------------------------------------------------- the owner's operations
+def _said(verified) -> str:
+    return {True: "verified by its Verifier", False: "NOT verified"}.get(verified, "verification not reported")
+
+
 def setup(root, as_of=None, timeout=SETUP_TIMEOUT, force=False, tag="boh-1loc", progress=print, **kw) -> dict:
     """The one-time FULL backfill over the whole bank window. A no-op when a baseline exists, unless force."""
     state = S.load(root)
     if state and state.get("baseline") and not force:
         return {"status": "exists", "baseline": state["baseline"], "covered_through": state["covered_through"]}
     started = time.monotonic()
-    progress("Bookkeeper backfill: one full run over the whole bank window (several minutes, up to ~15; "
-             "about 20 ASI calls)")
-    path = run_bookkeeper(root, as_of=as_of, timeout=timeout, tag=tag, progress=progress, **kw)
-    progress(f"Bookkeeper: wrote data/reports/{path.name}; ingesting")
+    progress("Bookkeeper backfill: one full run over the whole bank window, drafted by the Bookkeeper and checked "
+             "by its Verifier (two investigations, ~40 ASI calls plus revisions; can take most of an hour)")
+    path, verified = run_verified(root, as_of=as_of, timeout=timeout, tag=tag, progress=progress, **kw)
+    progress(f"Bookkeeper: wrote data/reports/{path.name} ({_said(verified)}); ingesting")
     merged = S.ingest(root, path, baseline=True)
-    return {"status": "done", "seconds": round(time.monotonic() - started, 1), "report": path.name, **merged}
+    return {"status": "done", "seconds": round(time.monotonic() - started, 1), "report": path.name,
+            "reply_verified": verified, **merged}
 
 
 def plan_update(root, tag="boh-1loc", allow_full=True, environ=None) -> dict:
@@ -285,15 +355,50 @@ def update(root, timeout=UPDATE_TIMEOUT, tag="boh-1loc", allow_full=True, progre
     started = time.monotonic()
     if plan["status"] == "delta":
         progress(f"Bookkeeper update: delta {plan['since']} .. {plan['as_of']}")
-        path = run_bookkeeper(root, as_of=plan["as_of"], since=plan["since"], prior=plan["prior"], timeout=timeout,
-                              tag=tag, progress=progress, environ=environ, **kw)
+        path, verified = run_verified(root, as_of=plan["as_of"], since=plan["since"], prior=plan["prior"],
+                                      timeout=timeout, tag=tag, progress=progress, environ=environ, **kw)
     else:
         progress(f"Bookkeeper update: the Bookkeeper has no delta mode yet (ORCHESTRATOR_BK_INCREMENTAL is off), so "
-                 f"this is a full rerun through {plan['as_of']}, diffed against the state")
-        path = run_bookkeeper(root, as_of=plan["as_of"], timeout=timeout, tag=tag, progress=progress,
-                              environ=environ, **kw)
+                 f"this is a full, verified rerun through {plan['as_of']}, diffed against the state")
+        path, verified = run_verified(root, as_of=plan["as_of"], timeout=timeout, tag=tag, progress=progress,
+                                      environ=environ, **kw)
+    progress(f"Bookkeeper: wrote data/reports/{path.name} ({_said(verified)}); ingesting")
     merged = S.ingest(root, path)
-    return {"status": "updated", "seconds": round(time.monotonic() - started, 1), "report": path.name, **merged}
+    return {"status": "updated", "seconds": round(time.monotonic() - started, 1), "report": path.name,
+            "reply_verified": verified, **merged}
+
+
+# ---------------------------------------------------------------- the served orchestrator: through the agent
+async def asetup(root, agent, timeout=SETUP_TIMEOUT, force=False, tag="boh-1loc", sender=SENDER, environ=None) -> dict:
+    """setup() through the Bookkeeper agent, on the caller's event loop (the uAgent). agent: async callable(payload)
+    -> reply dict; sender: the orchestrator's agent address (the Bookkeeper keys its report id on it)."""
+    state = await asyncio.to_thread(S.load, root)
+    if state and state.get("baseline") and not force:
+        return {"status": "exists", "baseline": state["baseline"], "covered_through": state["covered_through"]}
+    latest = await asyncio.to_thread(latest_bank_date, root, tag)
+    if latest is None:
+        raise BookkeeperError(f"data/nessie_sync_{tag}.db has no bank rows: run nessie_sync.py first")
+    started = time.monotonic()
+    payload = A.build_request(latest, request_id=new_request_id(latest), tag=tag, environ=environ)
+    path, verified = await arun_agent(root, agent, payload, timeout, sender)
+    merged = await asyncio.to_thread(S.ingest, root, path, True)
+    return {"status": "done", "seconds": round(time.monotonic() - started, 1), "report": path.name,
+            "reply_verified": verified, "via": "bookkeeper agent", **merged}
+
+
+async def aupdate(root, agent, timeout=UPDATE_TIMEOUT, tag="boh-1loc", allow_full=True, sender=SENDER,
+                  environ=None) -> dict:
+    """update() through the Bookkeeper agent, on the caller's event loop."""
+    plan = await asyncio.to_thread(plan_update, root, tag, allow_full, environ)
+    if plan["status"] in ("up_to_date", "skipped"):
+        return plan
+    started = time.monotonic()
+    payload = A.build_request(plan["as_of"], plan.get("since"), plan.get("prior"),
+                              request_id=new_request_id(plan["as_of"]), tag=tag, environ=environ)
+    path, verified = await arun_agent(root, agent, payload, timeout, sender)
+    merged = await asyncio.to_thread(S.ingest, root, path)
+    return {"status": "updated", "seconds": round(time.monotonic() - started, 1), "report": path.name,
+            "reply_verified": verified, "via": "bookkeeper agent", **merged}
 
 
 # ---------------------------------------------------------------- before a turn
@@ -356,21 +461,25 @@ async def _agent_update(root, agent, timeout, tag, environ) -> dict:
         return plan
     payload = A.build_request(plan["as_of"], plan["since"], plan["prior"], request_id=new_request_id(plan["as_of"]),
                               tag=tag, environ=environ)
-    path = await arun_agent(root, agent, payload, timeout)
+    path, _ = await arun_agent(root, agent, payload, timeout, getattr(agent, "sender", SENDER))
     merged = await asyncio.to_thread(S.ingest, root, path)
     return {"status": "updated", "report": path.name, **merged}
 
 
 def _agent_call(dispatch):
-    """Agent mode: a PeerDispatch with a Bookkeeper address -> async callable(payload) -> reply dict."""
+    """Agent mode: a PeerDispatch with a Bookkeeper address -> async callable(payload) -> reply dict. It uses the
+    dispatch's ask_bookkeeper (the reply is matched by request_id, because the Bookkeeper answers from its Verifier
+    handler, outside send_and_receive's session) when there is one, else its _call."""
     address = getattr(dispatch, "bookkeeper", None)
+    ask = getattr(dispatch, "ask_bookkeeper", None)
     call = getattr(dispatch, "_call", None)
-    if not address or call is None:
+    if not address or (ask is None and call is None):
         return None
 
     async def send(payload):
-        reply, why = await call(address, payload)
+        reply, why = await (ask(payload) if ask is not None else call(address, payload))
         if reply is None:
             raise BookkeeperError(f"the Bookkeeper agent {why}")
         return reply
+    send.sender = getattr(dispatch, "me", None) or SENDER
     return send

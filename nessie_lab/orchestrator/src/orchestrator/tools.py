@@ -87,8 +87,8 @@ TOOLS: list[dict] = [
         {"tool": {"type": "string", "enum": BK_TOOL_NAMES}, "args": {"type": "object"}}, ["tool"]),
     _fn("get_findings", "The Bookkeeper's open findings (merged from every report ingested since the one-time "
         "backfill, else the latest data/reports/R-*.json): findings, the adjustments they imply, what was rejected, "
-        "which adjustments the forecast uses, and how far the Bookkeeper's coverage runs. {'available': false} when "
-        "there is none."),
+        "whether each was verified by the Bookkeeper's own Verifier (verification_label), which adjustments the "
+        "forecast uses, and how far the Bookkeeper's coverage runs. {'available': false} when there is none."),
     _fn("scan_market", "Market scout: our dish prices against relevant nearby competitors (offline: saved menu pages). "
         "Positions, competitor medians, approved upcoming changes, and the report file.",
         {"items": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 80}, "maxItems": 50,
@@ -293,21 +293,30 @@ def latest_report(session: Session) -> Path | None:
     return reports[-1] if reports else None
 
 
-def _load_report(path, source=None):
-    """A report file (or `source`, a report dict from bk_state.open_findings_report, labelled `path`) -> the
-    findings tuple."""
+def _load_report(path, source=None, verified=None):
+    """A report file (or `source`, a report dict from bk_state.open_findings_report, labelled `path`, with
+    `verified` = bk_state.open_verification) -> (path, findings, adjustments, rejected, checks, passed, verification).
+    The checks are checks_bk's: with no owner decisions every finding awaits the owner (cautious adjustments only);
+    `verification` is what the Bookkeeper's Verifier loop said, as information."""
     import bookkeeper_tools as bt
     import contracts as K
 
-    from .checks_interim import check_findings
+    from . import checks_bk
 
-    findings, adjustments, rejected = K.from_bk_report(path if source is None else source, bt.bank_id_map())
+    if source is None:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        if not isinstance(raw, dict):
+            raise ValueError("report is not a JSON object")
+    else:
+        raw = source
+    findings, adjustments, rejected = K.from_bk_report(raw, bt.bank_id_map())
     if not isinstance(findings, list) or not isinstance(adjustments, list) or not isinstance(rejected, dict):
         raise ValueError("report did not convert to findings")
-    checks = check_findings(findings)
+    checks = checks_bk.check_findings(raw, findings, verified=verified)      # no owner decisions here yet
     passed = K.passed_adjustments(adjustments, checks)
-    json.dumps(displayed({"f": findings, "a": adjustments, "r": rejected, "c": checks, "p": passed}))
-    return (path, findings, adjustments, rejected, checks, passed)
+    verification = checks_bk.summary(raw, verified)
+    json.dumps(displayed({"f": findings, "a": adjustments, "r": rejected, "c": checks, "p": passed, "v": verification}))
+    return (path, findings, adjustments, rejected, checks, passed, verification)
 
 
 class _Label(str):
@@ -339,7 +348,8 @@ def _merged(session: Session, state):
     key = ("findings-state", st.st_mtime_ns, st.st_size)
     if key not in session.cache:
         label = _Label(f"{bk_state.STATE_NAME}, merged from {len(state['reports'])} report(s)")
-        session.cache[key] = _load_report(label, bk_state.open_findings_report(state))
+        session.cache[key] = _load_report(label, bk_state.open_findings_report(state),
+                                          bk_state.open_verification(state))
     return session.cache[key]
 
 
@@ -357,7 +367,8 @@ def _coverage(state, latest) -> dict:
 
 
 def _findings(session: Session):
-    """((report path, findings, adjustments, rejected, checks, passed adjustments) or None, [bad reports]).
+    """((report path, findings, adjustments, rejected, checks, passed adjustments, verification) or None,
+    [bad reports]).
 
     The merged Bookkeeper state (bk_state) wins when it exists: its open findings only. Otherwise the newest valid
     report wins; a report a peer named (session.preferred_report) is tried first. A report that can't be read or
@@ -394,9 +405,11 @@ def _adjustments(session: Session) -> tuple[list, str]:
     got, _ = _findings(session)
     if got is None:
         return [], "no Bookkeeper report yet: history used as the bank shows it"
-    path, *_, passed = got
-    return passed, (f"{len(passed)} cautious adjustment(s) from {path.name} (interim checks: every finding "
-                    "downgraded to the owner until checks.py exists)")
+    path, findings, _, _, checks, passed, ver = got
+    n_pass = sum(c.status == "pass" for c in checks)
+    return passed, (f"{len(passed)} cautious adjustment(s) from {path.name} ({ver['label']}; {n_pass} of "
+                    f"{len(findings)} finding(s) decided by the owner, the rest await the owner's review and count "
+                    "only if cautious)")
 
 
 def _round_dollar(cents: int) -> int:
@@ -473,7 +486,7 @@ def get_findings(session: Session) -> dict:
         return {"available": False, "rejected_reports": bad, **extra,
                 "why": ("no readable Bookkeeper report" if bad else "no Bookkeeper report yet") +
                        " (data/reports/R-*.json is written by the Bookkeeper on the bk branch)"}
-    path, findings, adjustments, rejected, checks, passed = got
+    path, findings, adjustments, rejected, checks, passed, ver = got
     if state is not None and isinstance(path, _Label):
         coverage = _coverage(state, latest)
         extra.update(source="merged Bookkeeper state", coverage=coverage, coverage_note=coverage["note"])
@@ -481,8 +494,11 @@ def get_findings(session: Session) -> dict:
         extra["source"] = "latest Bookkeeper report"
     return {"available": True, "report": path.name, "findings": findings, "adjustments": adjustments,
             "rejected": rejected, "rejected_reports": bad, "checks": checks, "forecast_uses": passed, **extra,
-            "checks_note": "interim checks (checks_interim.py) until checks.py exists: every finding is downgraded to "
-                           "the owner, so only cautious adjustments (money owed, an ongoing overcharge) reach the forecast"}
+            "verification": ver, "verification_label": ver["label"],
+            "checks_note": ("checks_bk: the owner decides every finding (accept, dismiss or revise); until then "
+                            "each awaits the owner, so only cautious adjustments (money owed, an ongoing overcharge, "
+                            "never as recoverable) reach the forecast. `verification` says what the Bookkeeper's "
+                            "Verifier found, as information for the owner; it never accepts a finding")}
 
 
 def bookkeeper_status(session: Session) -> dict:

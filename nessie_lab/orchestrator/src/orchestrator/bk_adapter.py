@@ -1,13 +1,22 @@
-"""The ONE place that knows the Bookkeeper's report and request shapes (bk branch, report schema 1.1).
+"""The ONE place that knows the Bookkeeper's report and request shapes (bk branch @ 872f15e, report schema 1.1 and 1.2).
 
 Today's Bookkeeper writes a FULL-window snapshot on every run (window {start, end}, end = as_of = the latest bank
-date), renumbers finding ids F1..Fn each time, and its ReportRequest forbids extra fields. Incremental support
-(a "delta" report covering only the newest days) is not shipped yet, so every field name for it below is a GUESS.
+date), renumbers finding ids F1..Fn each time, and its ReportRequest forbids extra fields (argparse also rejects
+unknown flags). Incremental support (a "delta" report covering only the newest days) is not shipped yet, so every
+field name for it below is a GUESS, and none of them is sent unless ORCHESTRATOR_BK_INCREMENTAL=1.
+
+Schema 1.2 (bookkeeper/verifier.py): every published report went through the Bookkeeper's own Verifier loop. The
+Verifier repeats the investigation independently, sends disagreements back for up to VERIFIER_MAX_ROUNDS revisions,
+and publishes ONE report with `verifier` (AgentInfo) set and `verification.passed` True. The published findings are
+the agreed ones plus, for whatever was still disputed, the Verifier's version; verification.notes say which
+(verified_status below parses them). `passed` is True on EVERY published 1.2 report, so "verified" here means "went
+through the loop", not "the two investigations agreed on everything".
 
 UPDATE THE CONSTANTS BELOW WHEN THE BOOKKEEPER OWNER CONFIRMS THE REAL NAMES; nothing else in the orchestrator
 reads these fields directly (bk_state, bk_runner, tools and cli all go through this module)."""
 import hashlib
 import os
+import re
 from datetime import date
 
 # ---------------------------------------------------------------- field names (guesses: update when confirmed)
@@ -29,7 +38,9 @@ PRIOR_FLAG = "--prior-report-id"
 INCREMENTAL_ENV = "ORCHESTRATOR_BK_INCREMENTAL"   # 1 = send since / prior_report_id (the Bookkeeper accepts them)
 AUTO_ENV = "ORCHESTRATOR_BK_AUTO"                 # 1 = a turn may run a quick DELTA update first (never a full one)
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.1"                    # what the synthetic merged report (bk_state) claims
+SCHEMA_VERSIONS = ("1.1", "1.2")          # what the Bookkeeper may send
+VERIFIED_SCHEMA = "1.2"
 TREATMENT_KINDS = ("exclude", "correct_to", "ongoing", "owed")
 
 
@@ -102,12 +113,12 @@ def covered_end(report: dict) -> date:
 
 
 def validate_report(report) -> list[str]:
-    """Structural problems with a schema-1.1 report (empty list = usable). Never quotes report text back."""
+    """Structural problems with a schema-1.1 or 1.2 report (empty list = usable). Never quotes report text back."""
     if not isinstance(report, dict):
         return ["not a JSON object"]
     problems = []
-    if str(report.get("schema_version", SCHEMA_VERSION)) != SCHEMA_VERSION:
-        problems.append("schema_version is not 1.1")
+    if str(report.get("schema_version", SCHEMA_VERSION)) not in SCHEMA_VERSIONS:
+        problems.append("schema_version is not 1.1 or 1.2")
     if not isinstance(report.get("report_id"), str) or not report.get("report_id"):
         problems.append("report_id missing")
     try:
@@ -131,6 +142,64 @@ def validate_report(report) -> list[str]:
         if STATUS_FIELD in f and f[STATUS_FIELD] not in STATUSES:
             problems.append(f"findings[{i}].{STATUS_FIELD} is not one of {', '.join(STATUSES)}")
     return problems
+
+
+# ---------------------------------------------------------------- the Verifier's loop (schema 1.2)
+# The note strings bookkeeper/verifier.py (_published, ~152-154) writes into verification.notes. F{n} is the
+# PUBLISHED id; the Bookkeeper's own ids in these notes (and every note compare.py adds, "F2: the Bookkeeper said
+# error and the Verifier needs_owner; ...") are DRAFT ids, which name nothing in the published report.
+REPLACED_NOTE = re.compile(r"^(F\d+) \(.*?\): the Verifier's version replaces the Bookkeeper's (\S+) \(")
+VERIFIER_ONLY_NOTE = re.compile(r"^(F\d+) \(.*?\): found by the Verifier; the Bookkeeper did not report it")
+LEFT_OUT_NOTE = re.compile(r"^Left out the Bookkeeper's (\S+) \((.*?)\): (.*?)\.?$")
+AGREED, REPLACED, VERIFIER_ONLY = "agreed", "replaced", "verifier_only"
+
+
+def _count(value) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def verified_status(report: dict) -> dict:
+    """What the Bookkeeper's Verifier did with this report.
+
+    -> {"verified": bool, "rounds", "findings_checked", "findings_rejected",
+        "per_finding": {published id: "agreed" | "replaced" | "verifier_only"}, "left_out": [{bookkeeper_id, about,
+        reason}]}
+
+    verified = schema 1.2 AND a `verifier` AgentInfo AND verification.passed: the report went through the loop.
+    Then every published finding is "agreed" unless a Verifier note says it was replaced or found only by the
+    Verifier. Anything else (1.1, a 1.2 draft, the orchestrator's merged report) -> verified False, per_finding {}."""
+    report = report if isinstance(report, dict) else {}
+    ver = report.get("verification") if isinstance(report.get("verification"), dict) else {}
+    agent = report.get("verifier")
+    verified = (str(report.get("schema_version")) == VERIFIED_SCHEMA and isinstance(agent, dict)
+                and isinstance(agent.get("trace_id"), str) and bool(agent.get("trace_id"))
+                and ver.get("passed") is True)
+    out = {"verified": verified, "rounds": _count(ver.get("rounds")),
+           "findings_checked": _count(ver.get("findings_checked")),
+           "findings_rejected": _count(ver.get("findings_rejected")), "per_finding": {}, "left_out": []}
+    if not verified:
+        return out
+    published = [str(f.get("id")) for f in report.get("findings") or [] if isinstance(f, dict)]
+    marks = {}
+    for note in ver.get("notes") or []:
+        if not isinstance(note, str):
+            continue
+        if m := REPLACED_NOTE.match(note):
+            marks[m.group(1)] = REPLACED
+        elif m := VERIFIER_ONLY_NOTE.match(note):
+            marks[m.group(1)] = VERIFIER_ONLY
+        elif m := LEFT_OUT_NOTE.match(note):
+            out["left_out"].append({"bookkeeper_id": m.group(1), "about": m.group(2)[:160], "reason": m.group(3)[:300]})
+    out["per_finding"] = {fid: marks.get(fid, AGREED) for fid in published}
+    return out
+
+
+def verification_label(verified: bool, rounds) -> str:
+    """The one wording the brief, the tools and the API show."""
+    if not verified:
+        return "not verified"
+    return (f"verified by the Bookkeeper's Verifier ({rounds} round{'s' if rounds != 1 else ''})"
+            if isinstance(rounds, int) else "verified by the Bookkeeper's Verifier")
 
 
 # ---------------------------------------------------------------- findings
