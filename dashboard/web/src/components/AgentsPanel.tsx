@@ -47,7 +47,7 @@ export function AgentsPanel({
 }) {
   const [open, setOpen] = useState(true);
   const last = Math.max(0, ...Object.values(steps).map((s) => s?.t ?? 0));
-  const heading = failed ? "The check stopped" : finished ? `Books checked in ${Math.max(1, Math.round(last))} s` : "Checking the books";
+  const heading = failed ? "The check stopped" : finished ? `Books checked in ${Math.max(1, Math.round(last))}\u00a0s` : "Checking the books";
   const expanded = open || !finished || !!failed;
 
   return (
