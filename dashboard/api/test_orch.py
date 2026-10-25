@@ -134,3 +134,14 @@ def test_app_files_stay_inside_dist(tmp_path):
     assert main.app_file(web, "../secret.txt") == index
     assert main.app_file(web, "assets/../../secret.txt") == index
     assert main.app_file(web, str((tmp_path / "secret.txt").resolve())) == index
+
+    def touched(self, *a, **k):
+        raise AssertionError(f"touched the filesystem for {self}")
+
+    root = web.resolve()
+    with pytest.MonkeyPatch.context() as mp:               # on Windows, resolving //host/share connects to that host
+        mp.setattr(main.Path, "resolve", lambda self, *a, **k: root if self == web else touched(self))
+        mp.setattr(main.Path, "is_file", touched)
+        for bad in ("//evil.example/share/x", "\\\\evil.example\\share\\x", "/etc/passwd", "C:secret.txt",
+                    "assets\\..\\..\\secret.txt", "assets/a.js\0", "a/../../x"):
+            assert main.app_file(web, bad) == index, bad

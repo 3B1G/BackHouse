@@ -123,6 +123,7 @@ function FindingCard({
           <dd className={`inline ${f.proposal ? "font-bold text-ink" : "text-carbon"}`}>
             {f.proposal ? DECIDED[f.proposal.decision] ?? f.proposal.decision : "Not decided yet"}
             {f.proposal?.note ? ` (${f.proposal.note})` : ""}
+            {f.proposal?.forced ? `. Sent back for revision: ${f.proposal.forced}` : ""}
           </dd>
         </div>
       </dl>
@@ -181,14 +182,17 @@ export function Review() {
 
   const decide = async (body: DecideBody) => {
     setBusy(true);
+    let refused: string | null = null;
     try {
       const r = await api.decide(body);
-      setError(r.ok ? null : (r.error ?? "The orchestrator didn't record that."));
+      if (!r.ok) refused = r.error ?? "The orchestrator didn't record that.";
     } catch (e) {
-      setError((e as Error).message);
+      refused = (e as Error).message;
+    } finally {
+      await load(); // the refresh must not hide why a decision was refused
+      if (refused) setError(refused);
+      setBusy(false);
     }
-    await load();
-    setBusy(false);
   };
 
   const findings = review?.ok ? review.findings : [];

@@ -125,10 +125,15 @@ def chat_answer(req: ChatRequest):
 
 
 def app_file(web: Path, path: str) -> Path:
-    """The built file at `path`, else index.html (the app routes by hash). Nothing outside web/dist: no ../ or absolute paths."""
+    """The built file at `path`, else index.html (the app routes by hash). Nothing outside web/dist: no ../, absolute,
+    drive or network-share paths, refused before the filesystem is touched (on Windows, resolving //host/share alone
+    connects to that host and offers it the user's login hash)."""
     root = web.resolve()
+    index = root / "index.html"
+    if not path or path.startswith("/") or any(c in path for c in "\\:\0") or ".." in path.split("/"):
+        return index
     target = (root / path).resolve()
-    return target if path and target.is_relative_to(root) and target.is_file() else root / "index.html"
+    return target if target.is_relative_to(root) and target.is_file() else index
 
 
 if WEB.exists():

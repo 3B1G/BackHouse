@@ -140,7 +140,7 @@ export type ReviewFinding = {
   counterparty: string | null;
   impact: OrchMoney | null;
   verifier: string | null;
-  proposal: { decision: Decision; note: string | null; forced: boolean | null; proposed_by: string; decided_at: string } | null;
+  proposal: { decision: Decision; note: string | null; forced: string | null; proposed_by: string; decided_at: string } | null;
 };
 
 /** The orchestrator answers problems as ok: false with an error (HTTP 200), so check ok before the rest. */
@@ -166,6 +166,8 @@ async function read<T>(res: Response): Promise<T> {
     try {
       const body = await res.json();
       if (typeof body?.detail === "string") message = body.detail;
+      else if (Array.isArray(body?.detail) && typeof body.detail[0]?.msg === "string") message = body.detail[0].msg;
+      else if (typeof body?.error === "string") message = body.error;
     } catch {
       // keep the generic message
     }
