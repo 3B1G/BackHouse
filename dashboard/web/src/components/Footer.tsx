@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { owner } from "../api";
 import { LINKS } from "../links";
-import { CheckMark } from "./Header";
+import { Logo } from "./Header";
 
 const NOTES = [
   "Demo Bistro is a made-up restaurant, and its bank is Nessie test data, so no real money moves.",
@@ -67,7 +67,7 @@ export function Footer() {
       <div className="mx-auto grid max-w-6xl gap-10 px-4 py-14 sm:px-6 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,1.3fr)] 2xl:max-w-7xl">
         <div>
           <a href="#/" className={`inline-flex min-h-11 items-center gap-2 font-display text-2xl font-extrabold no-underline [font-stretch:80%] ${LINK}`}>
-            <CheckMark className="h-8 w-8 text-ink" />
+            <Logo className="h-10 w-10" />
             Hermes
           </a>
           <p className="mt-3 max-w-[38ch] text-[0.9375rem] text-paper/80">
