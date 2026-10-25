@@ -16,7 +16,6 @@ data/reports/
 .venv/
 
 # market scout
-.venv/
 .pytest_cache/
 data/market_reports/
 data/market_pages/

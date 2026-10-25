@@ -1,0 +1,110 @@
+@import "tailwindcss";
+
+/* BackHouse tokens: the green diner guest check. Edit here to restyle everything.
+   One family, Archivo, at two widths: condensed and heavy for statements, normal width for reading. */
+@theme {
+  --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Archivo", ui-sans-serif, system-ui, sans-serif;
+
+  --color-paper: #fcfcfa;        /* page */
+  --color-check: #e3eedd;        /* guest-check green */
+  --color-check-deep: #d2e4c8;   /* pressed / selected on check green */
+  --color-rule: #bcd4b0;         /* ruled lines, borders */
+  --color-ink: #1f4d36;          /* check ink: headings, primary actions */
+  --color-carbon: #22272a;       /* body text */
+  --color-pencil: #55605a;       /* secondary text (5.5:1 on check, 6.4:1 on paper) */
+  --color-serial: #b3261e;       /* the red check number: shortfalls and errors */
+  --color-serial-mid: #e8a097;
+  --color-serial-soft: #f6dcd7;
+
+  /* Charts. Checked with the dataviz palette validator: ballpoint and serial stay apart for colorblind readers. */
+  --color-ballpoint: #1d6fa3;    /* the server's blue pen: cash, months it grew, spending */
+  --color-ghost: #8a958e;        /* "if nothing changes", always dashed or a tick */
+  --color-ahead: #eef4ea;        /* the months still to come */
+
+  /* shadcn/ui names for the same colors, so components in components/ui render in this palette */
+  --color-background: var(--color-paper);
+  --color-foreground: var(--color-carbon);
+  --color-muted-foreground: var(--color-pencil);
+  --color-border: var(--color-rule);
+  --color-primary: var(--color-ink);
+  --color-secondary: var(--color-check);
+}
+
+@layer base {
+  html {
+    /* Big desktop screens get bigger everything, not wider margins: 16px up to 1280px wide, 1px more per 160px, at most 20px.
+       Every size in the app is in rem, so text, spacing, stubs and charts all grow together. */
+    font-size: clamp(100%, calc(100% + (100vw - 1280px) / 160), 125%);
+    background: var(--color-paper);
+    color: var(--color-carbon);
+    font-family: var(--font-sans);
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+  a {
+    color: var(--color-ink);
+  }
+  button {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* The hero band: a guest check, faint ruled lines on green. */
+.guest-check {
+  background-color: var(--color-check);
+  background-image: repeating-linear-gradient(to bottom, transparent 0 2.6875rem, #d3e3ca 2.6875rem 2.75rem);
+}
+
+/* A connection on the developer view's map with a call in flight: the dashes run toward the agent. */
+.edge-live {
+  stroke-dasharray: 7 6;
+  animation: edge-flow 0.8s linear infinite;
+}
+@keyframes edge-flow {
+  to {
+    stroke-dashoffset: -26;
+  }
+}
+
+/* A payday stub: the top edge is the perforation it was torn along. */
+.stub {
+  border-top-style: dashed;
+}
+
+.skip-link {
+  position: absolute;
+  left: 0.75rem;
+  top: -4rem;
+  z-index: 50;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--color-ink);
+  color: #fff;
+}
+.skip-link:focus {
+  top: 0.75rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

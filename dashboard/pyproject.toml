@@ -1,0 +1,19 @@
+[project]
+name = "back-of-house-dashboard"
+version = "0.1.0"
+description = "Owner dashboard and chat for Back of House: FastAPI backend over nessie_lab, React frontend in web/"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "python-multipart>=0.0.9",
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "pydantic>=2.7",
+  "requests>=2.31",
+  "matplotlib>=3.8",
+  "tabulate>=0.9",
+]
+
+[tool.uv]
+package = false
