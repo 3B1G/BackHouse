@@ -3,7 +3,7 @@ import { IconArrowUpRight } from "@tabler/icons-react";
 import { askChat, recall, remember, type ChatLink, type ChatSection, type ChatTurn } from "../api";
 import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
-import { CheckMark } from "../components/Header";
+import { Logo } from "../components/Header";
 
 // needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model;
 // links: buttons to a change on the dashboard, where the owner approves, declines or sets the price; sections: the parts
@@ -253,7 +253,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
           ) : (
             <article key={i} className="max-w-[68ch]">
               <p className="mb-1.5 flex items-center gap-2 text-sm font-bold text-ink">
-                <CheckMark className="h-5 w-5 text-ink" />
+                <Logo className="h-6 w-6" />
                 Hermes
               </p>
               {m.failed ? (

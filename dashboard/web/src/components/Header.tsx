@@ -3,20 +3,10 @@ import NavMenu from "@/components/ui/menu-hover-effects";
 import type { Route } from "../App";
 import { LINKS } from "../links";
 
-export function CheckMark({ className = "" }: { className?: string }) {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 32 32" className={className}>
-      <path
-        d="M7 3h18v23l-3-2.5-3 2.5-3-2.5-3 2.5-3-2.5-3 2.5z"
-        fill="var(--color-check)"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinejoin="round"
-      />
-      <path d="M11 10h10M11 14h10M11 18h6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="22" cy="7.5" r="1.6" fill="var(--color-serial)" />
-    </svg>
-  );
+/** The Hermes logo, always next to the name, so its alt text is empty. A 192px rendering of brand/hermes-logo.svg (the
+ * master, 0.9 MB of embedded images), sharp at up to 64px on 3x screens. */
+export function Logo({ className = "" }: { className?: string }) {
+  return <img src="/hermes-logo.png" alt="" width={192} height={192} className={`shrink-0 object-contain ${className}`} />;
 }
 
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -122,7 +112,7 @@ export function Header({ route, restaurant, onNewCheck }: { route: Route; restau
             href="#/"
             className="flex min-h-11 items-center gap-2 font-display text-xl font-extrabold text-ink no-underline [font-stretch:80%]"
           >
-            <CheckMark className="h-7 w-7 text-ink" />
+            <Logo className="h-9 w-9" />
             Hermes
           </a>
           <span className="text-[0.9375rem] text-pencil">{restaurant ?? "No restaurant connected yet"}</span>
