@@ -69,6 +69,50 @@ export type RunEvent =
   | { type: "done"; t: number }
   | { type: "error"; text: string; t: number };
 
+/** The orchestrator's stages, in order. Each unlocks the next; the review is committed only at the owner's terminal. */
+export type Stage = "Audit" | "Review" | "Commit" | "Forecast" | "Suggest";
+export type StageInfo = {
+  stage: Stage;
+  why: string;
+  review_id: string | null;
+  as_of: string | null;
+  report: string | null;
+  open_findings: number;
+  decided: number;
+  digest: string | null;
+  approve_command: string | null;
+  suggestion_file: string | null;
+  order: Stage[];
+};
+
+export type Decision = "accept" | "dismiss" | "revise";
+/** Money from the orchestrator: cents and a ready-made "$1,234.56". */
+export type OrchMoney = { cents: number; usd: string };
+
+export type ReviewFinding = {
+  finding_id: string;
+  verdict: string | null;
+  root_cause: string | null;
+  counterparty: string | null;
+  impact: OrchMoney | null;
+  verifier: string | null;
+  proposal: { decision: Decision; note: string | null; forced: boolean | null; proposed_by: string; decided_at: string } | null;
+};
+
+/** The orchestrator answers problems as ok: false with an error (HTTP 200), so check ok before the rest. */
+export type Review = {
+  ok: boolean;
+  error: string | null;
+  stage: StageInfo | null;
+  committed: boolean;
+  findings: ReviewFinding[];
+  batch: { finding_ids?: string[]; line?: string | null };
+  note: string;
+};
+
+export type DecideResult = { ok: boolean; error: string | null; proposed: Record<string, unknown>[]; stage: StageInfo | null; committed: boolean };
+export type DecideBody = { finding: string; decision: Decision; note?: string } | { accept_verified_errors: true };
+
 export type Account = { name: string; type: string };
 export type Upload = { upload_id: string; name: string; size: number; invoices: number };
 
@@ -100,6 +144,13 @@ export const api = {
   forecast: (whatIfs: string[]) =>
     fetch(`/api/forecast?w=${encodeURIComponent(whatIfs.join(","))}`).then((r) => read<Forecast>(r)),
   scenarios: () => fetch("/api/scenarios").then((r) => read<{ scenarios: Scenario[] }>(r)),
+  /** The orchestrator's review, through the dashboard server (which holds its token). */
+  review: () => fetch("/api/orch/review").then((r) => read<Review>(r)),
+  /** Records a proposed decision. It never commits: the owner does that at their terminal. */
+  decide: (body: DecideBody) =>
+    fetch("/api/orch/review/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(
+      (r) => read<DecideResult>(r),
+    ),
 };
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };

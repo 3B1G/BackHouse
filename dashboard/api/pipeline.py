@@ -85,7 +85,10 @@ def _script(run, step, name, *args):
 
 def _day(iso):
     """2027-02-19 -> Feb 19, 2027"""
-    return date.fromisoformat(str(iso)[:10]).strftime("%b %-d, %Y") if iso else iso
+    if not iso:
+        return iso
+    d = date.fromisoformat(str(iso)[:10])
+    return f"{d:%b} {d.day}, {d.year}"          # not %-d: Windows' strftime rejects it
 
 
 def _check(run, step, status, text):
@@ -178,7 +181,7 @@ def _execute(run, upload):
                    else f"The verifier isn't built yet, so none of its {len(adjustments)} fixes reach the forecast")
             for f in findings:
                 run.emit(type="finding", finding=f.model_dump(mode="json"))
-            _step(run, "bookkeeper", "done", f"Confirmed {len(findings)} problems", findings=len(findings),
+            _step(run, "bookkeeper", "done", f"{len(findings)} findings to review", findings=len(findings),
                   rejected=len(rejected), report=reports[-1].name)
 
         forecast.use_adjustments(passed)       # every forecast from here on, what-ifs and Chat included, uses them

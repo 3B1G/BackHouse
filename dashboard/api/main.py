@@ -21,10 +21,12 @@ from pydantic import BaseModel
 import core
 from core import DATA, TAG, UPLOADS
 import forecast
+import orch
 import pipeline
 import tracelog
 
 app = FastAPI(title="BackHouse")
+app.include_router(orch.router)       # before the app's catch-all below
 WEB = Path(__file__).resolve().parents[1] / "web" / "dist"
 NEEDED_TABLES = {"invoices", "invoice_lines", "vendor_bills", "payroll_runs", "pos_card_batches"}
 
@@ -122,10 +124,16 @@ def chat_answer(req: ChatRequest):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+def app_file(web: Path, path: str) -> Path:
+    """The built file at `path`, else index.html (the app routes by hash). Nothing outside web/dist: no ../ or absolute paths."""
+    root = web.resolve()
+    target = (root / path).resolve()
+    return target if path and target.is_relative_to(root) and target.is_file() else root / "index.html"
+
+
 if WEB.exists():
     app.mount("/assets", StaticFiles(directory=WEB / "assets"), name="assets")
 
     @app.get("/{path:path}")
     def spa(path: str):
-        target = WEB / path
-        return FileResponse(target if path and target.is_file() else WEB / "index.html")
+        return FileResponse(app_file(WEB, path))

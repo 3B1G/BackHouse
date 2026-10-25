@@ -6,10 +6,11 @@ import { Sponsors } from "./components/Sponsors";
 import { Chat } from "./screens/Chat";
 import { Dashboard } from "./screens/Dashboard";
 import { Developer } from "./screens/Developer";
+import { Review } from "./screens/Review";
 
-export type Route = "dashboard" | "forecast" | "how" | "chat" | "developer";
+export type Route = "dashboard" | "forecast" | "review" | "how" | "chat" | "developer";
 
-const PATHS: Record<string, Route> = { "": "dashboard", forecast: "forecast", "how-it-works": "how", chat: "chat", developer: "developer" };
+const PATHS: Record<string, Route> = { "": "dashboard", forecast: "forecast", review: "review", "how-it-works": "how", chat: "chat", developer: "developer" };
 
 function useRoute(): Route {
   const [hash, setHash] = useState(() => window.location.hash);
@@ -69,6 +70,8 @@ export default function App() {
           <Chat restaurant={restaurant} />
         ) : route === "developer" ? (
           <Developer />
+        ) : route === "review" ? (
+          <Review />
         ) : (
           <Dashboard key={fresh} view={route} onRestaurant={connected} />
         )}
