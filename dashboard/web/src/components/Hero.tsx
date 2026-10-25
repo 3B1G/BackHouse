@@ -41,7 +41,7 @@ export function Hero(props: Props) {
           ) : props.mode === "loading" ? (
             "Reading the bank and your records. Your paydays fill in as soon as the Forecaster finishes."
           ) : (
-            "Connect the bank and add your records. Four agents check every transaction, find what's wrong and work out when cash runs short. Nothing changes without your approval."
+            "Start in the Chat: connect the bank and add your records. Four agents check every transaction, find what's wrong and work out when cash runs short. Nothing changes without your approval."
           )}
         </p>
         <PaydayStrip paydays={ready ? props.shown.paydays : null} />

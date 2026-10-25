@@ -190,6 +190,8 @@ export const api = {
   forecast: (whatIfs: string[]) =>
     fetch(`/api/forecast?w=${encodeURIComponent(whatIfs.join(","))}`).then((r) => read<Forecast>(r)),
   scenarios: () => fetch("/api/scenarios").then((r) => read<{ scenarios: Scenario[] }>(r)),
+  /** Whether the bank and records are in yet; a check puts them there. */
+  readiness: () => fetch("/api/readiness").then((r) => read<{ ready: boolean; missing: ("bank" | "records")[] }>(r)),
   /** The orchestrator's review, through the dashboard server (which holds its token). */
   review: () => fetch("/api/orch/review").then((r) => read<Review>(r)),
   /** Records a proposed decision. It never commits: the owner does that at their terminal. */
@@ -203,6 +205,8 @@ export type ChatTurn = { role: "user" | "assistant"; content: string };
 export type ChatEvent =
   | { type: "tool"; text: string }
   | { type: "answer"; text: string; sources: string[]; off_topic?: boolean }
+  /** Asked before any data is in: the chat holds the question and offers an upload or the sample books. */
+  | { type: "needs_data"; text: string; missing: ("bank" | "records")[] }
   | { type: "error"; text: string };
 
 /** Asks the chat a question with the conversation so far; streams what it looks at, then the answer. */

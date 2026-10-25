@@ -36,6 +36,12 @@ def health():
     return {"ok": True}
 
 
+@app.get("/api/readiness")
+def readiness():
+    """Whether the bank and records are in place yet (missing: "bank", "records"), so the app can ask for them."""
+    return core.readiness()
+
+
 @app.post("/api/bank/connect")
 def connect_bank():
     """Proves the bank connection: reads the restaurant's accounts from Nessie, live."""

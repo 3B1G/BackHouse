@@ -44,11 +44,13 @@ export default function App() {
     remember("boh-restaurant", name);
   };
 
+  // A new check starts over in the Chat (where Get started is), with a fresh conversation.
   const newCheck = () => {
     remember("boh-run", null);
+    remember("boh-chat", null);
     connected(null);
     setFresh((n) => n + 1);
-    window.location.hash = "#/";
+    window.location.hash = "#/chat";
     window.scrollTo(0, 0);
   };
 
@@ -67,7 +69,7 @@ export default function App() {
       <Header route={route} restaurant={restaurant} onNewCheck={newCheck} />
       <main id="main" ref={main} tabIndex={-1} className="outline-none">
         {route === "chat" ? (
-          <Chat restaurant={restaurant} />
+          <Chat key={fresh} restaurant={restaurant} onRestaurant={connected} />
         ) : route === "developer" ? (
           <Developer />
         ) : route === "review" ? (
