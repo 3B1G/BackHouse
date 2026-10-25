@@ -1,9 +1,8 @@
-import HowItWorksRail, { type Stamp, type TicketStep } from "@/components/ui/how-it-works";
-import type { StepEvent, StepId } from "../api";
+import HowItWorksRail, { type TicketStep } from "@/components/ui/how-it-works";
+import type { Plan, StepEvent, StepId } from "../api";
 import { clock } from "../format";
 
 type Steps = Partial<Record<StepId, StepEvent>>;
-const NEXT: Stamp = { tone: "next", text: "Next" };
 
 /** What the current check says about one step, as the check's status line and stamp. */
 function live(steps: Steps, id: StepId, running: boolean): Pick<TicketStep, "status" | "stamp"> {
@@ -14,8 +13,10 @@ function live(steps: Steps, id: StepId, running: boolean): Pick<TicketStep, "sta
   return { status: s.text, stamp: { tone: "working", text: "Working" } };
 }
 
-export function HowItWorks({ steps, running }: { steps: Steps; running: boolean }) {
-  // Stage 1, "what is going on?", runs in every check; stage 2, "what do we do about it?", is the team's next piece.
+export function HowItWorks({ steps, running, plan }: { steps: Steps; running: boolean; plan: Plan | null }) {
+  // Every check runs stage 1, "what is going on?", then the orchestrator's half of stage 2, "what do we do about it?".
+  // The rest of stage 2 is the owner's: approving a change at the terminal is what lets Changes carry it out.
+  const waiting = plan?.fixes.length ?? 0;
   const first: TicketStep[] = [
     {
       title: "Nessie reads the bank",
@@ -57,26 +58,27 @@ export function HowItWorks({ steps, running }: { steps: Steps; running: boolean 
       agent: "Market scout",
       uses: "Fetch.ai agent",
       description: "Your dish prices against nearby restaurants' own menus: below, at or above the market.",
-      status: "Built; joins the check next",
-      stamp: NEXT,
+      ...live(steps, "market", running),
     },
   ];
   const then: TicketStep[] = [
     {
       title: "The orchestrator suggests changes",
       agent: "Orchestrator",
-      uses: "ASI:One by Fetch.ai",
+      uses: "Fetch.ai agent on ASI:One",
       description: "It weighs the findings, the forecast and the prices, and suggests a few changes, each with what it does to your cash.",
-      status: "Coming next",
-      stamp: NEXT,
+      ...live(steps, "orchestrator", running),
     },
     {
       title: "You approve, and Changes carries it out",
       agent: "Changes",
       uses: "Plain code, no AI",
-      description: "Nothing happens until you sign. Then it changes a price or moves a bill, and logs what it did.",
-      status: "Built; joins the dashboard next",
-      stamp: NEXT,
+      description: "It dry-runs every suggestion first. Nothing happens until you approve one at your terminal; then it changes the price or the menu, and logs what it did.",
+      status: waiting
+        ? `${waiting} suggested change${waiting === 1 ? "" : "s"} passed the dry run and wait${waiting === 1 ? "s" : ""} for you on the dashboard`
+        : "Waits for a suggestion you approve",
+      stamp: waiting ? { tone: "ready", text: "Your turn" } : undefined,
+      href: waiting ? "#/" : undefined,
     },
     {
       title: "Ask the Chat anything",

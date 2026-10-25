@@ -22,10 +22,23 @@ const CHECK_STEPS = [
     title: "The Forecaster plays out 1,000 futures",
     what: "forecaster.py simulates the next two years day by day, from the bank history, the bills and any Bookkeeper fixes the verifier passed.",
   },
+  {
+    agent: "Market scout",
+    title: "Market scout compares your prices",
+    what: "The Fetch.ai agent reads nearby restaurants' own menu pages and puts each dish below, at or above the market.",
+  },
+  {
+    agent: "Orchestrator",
+    title: "The orchestrator suggests changes",
+    what: "Its brief gathers cash, bills, findings, the forecast and the prices, then forecasts each candidate change. Changes dry-runs the ones that help and saves them for your approval.",
+  },
 ];
 const LATER_STEPS = [
-  { id: "Market scout", title: "Market scout compares menu prices", what: "Reads nearby restaurants' own menus for the Orchestrator. Built; joins the check next." },
-  { id: "Changes", title: "Changes carries out what you approve", what: "The only part that writes, and only with your signed approval. Built; joins the check next." },
+  {
+    id: "Changes",
+    title: "You approve, and Changes carries it out",
+    what: "The only part that writes. It runs when you approve a suggestion at your terminal, with the owner passphrase.",
+  },
 ];
 
 const checksOf = (events: TraceEvent[], agent: string): StepCheck[] =>
@@ -92,7 +105,7 @@ function checkTimeline(events: TraceEvent[], now: number) {
           description: end.kind === "error" ? "The step marked above says why." : "The dashboard, the forecast and the Chat now use these numbers.",
         }
       : { id: "end", type: "open", title: "Check finishes", activityTime: "in a few seconds" },
-    ...LATER_STEPS.map((s) => ({ id: s.id, type: "open" as StepType, title: s.title, description: s.what, activityTime: "next", muted: true })),
+    ...LATER_STEPS.map((s) => ({ id: s.id, type: "open" as StepType, title: s.title, description: s.what, activityTime: "your call", muted: true })),
   );
   return { title: `Run ${group}`, steps };
 }
@@ -259,7 +272,7 @@ export function Developer() {
             Who calls whom
           </h2>
           <p className="mt-1 max-w-[72ch] text-[0.9375rem] text-pencil">
-            The Orchestrator runs a check by calling five agents in order. The Chat agent answers questions with a scope check, ASI:One and
+            The Orchestrator runs a check by calling six agents in order, then has Changes dry-run the fixes it suggests. The Chat agent answers questions with a scope check, ASI:One and
             read-only tools, and reaches the Forecaster through its what-if tool. The dashboard's what-ifs call the Forecaster directly.
           </p>
           <AgentMap events={visible} now={now} />
@@ -272,9 +285,6 @@ export function Developer() {
             </Key>
             <Key label="Working right now">
               <rect x="2" y="2" width="24" height="12" rx="4" fill="var(--color-check-deep)" stroke="var(--color-ink)" strokeWidth="2" />
-            </Key>
-            <Key label="Built, joins next">
-              <rect x="2" y="2" width="24" height="12" rx="4" fill="var(--color-paper)" stroke="var(--color-ghost)" strokeWidth="2" strokeDasharray="4 3" />
             </Key>
             <Key label="The Chat's what-ifs">
               <line x1="2" x2="26" y1="8" y2="8" stroke="var(--color-ghost)" strokeWidth="2" strokeDasharray="2 4" strokeLinecap="round" />
@@ -313,7 +323,7 @@ export function Developer() {
   );
 }
 
-const AGENTS = ["Pipeline", "Nessie", "Records", "Matcher", "Bookkeeper", "Forecaster", "Scope check", "Chat", "Tools"];
+const AGENTS = ["Pipeline", "Nessie", "Records", "Matcher", "Bookkeeper", "Forecaster", "Market scout", "Orchestrator", "Changes", "Scope check", "Chat", "Tools"];
 const VERB: Record<TraceKind, string> = {
   start: "started",
   done: "done",

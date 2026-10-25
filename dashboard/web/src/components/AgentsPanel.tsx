@@ -8,6 +8,8 @@ const STEPS: { id: StepId; name: string; upNext: string }[] = [
   { id: "matcher", name: "Matcher", upNext: "Matches the bank to your records" },
   { id: "bookkeeper", name: "Bookkeeper", upNext: "Looks into what doesn't match" },
   { id: "forecast", name: "Forecaster", upNext: "Runs 1,000 futures" },
+  { id: "market", name: "Market scout", upNext: "Compares your prices with nearby menus" },
+  { id: "orchestrator", name: "Orchestrator", upNext: "Suggests changes that help your cash" },
 ];
 
 function Icon({ state }: { state: "done" | "working" | "waiting" | "next" }) {
