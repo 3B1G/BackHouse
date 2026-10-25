@@ -372,7 +372,8 @@ def get_cash_position(session: Session) -> dict:
     import bookkeeper_tools as bt
 
     r = bt.get_account_balances(session.as_of.isoformat() if session.as_of else None)
-    return {"as_of": r["as_of"], "total_cents": int(r["total_balance_cents"]), "source": bt.BANK_DB.name,
+    total = r["total_cents"] if "total_cents" in r else r["total_balance_cents"]    # bookkeeper_tools renamed it in #14
+    return {"as_of": r["as_of"], "total_cents": int(total), "source": bt.BANK_DB.name,
             "accounts": [{"account": a["account"], "nickname": a["nickname"], "balance_cents": int(a["balance_cents"])}
                          for a in r["accounts"]]}
 
