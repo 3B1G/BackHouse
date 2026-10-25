@@ -12,7 +12,7 @@ const VIEWS = [
 type View = (typeof VIEWS)[number]["id"];
 
 /** Three ways to see the same money, switched with tabs. The owner's last choice is remembered on this device. */
-export function TrendPanel({ f, compare, pending }: { f: Forecast; compare: boolean; pending: boolean }) {
+export function TrendPanel({ f }: { f: Forecast }) {
   const [view, setView] = useState<View>(() => {
     const saved = preferred("boh-chart");
     return VIEWS.find((v) => v.id === saved)?.id ?? "cash";
@@ -74,13 +74,12 @@ export function TrendPanel({ f, compare, pending }: { f: Forecast; compare: bool
         role="tabpanel"
         id="trend-panel"
         aria-labelledby={`tab-${view}`}
-        aria-busy={pending}
-        className={`mt-5 transition-opacity duration-200 ${pending ? "opacity-60" : ""}`}
+        className="mt-5"
       >
         {view === "cash" ? (
-          <CashChart f={f} compare={compare} table={table} />
+          <CashChart f={f} table={table} />
         ) : view === "monthly" ? (
-          <MonthChart f={f} compare={compare} table={table} />
+          <MonthChart f={f} table={table} />
         ) : (
           <SpendChart f={f} table={table} />
         )}

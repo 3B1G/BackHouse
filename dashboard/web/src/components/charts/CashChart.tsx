@@ -6,28 +6,25 @@ import { Legend, LineKey, SwatchKey, TableFrame, Tooltip, ViewTitle } from "./Ch
 
 /** One payday: the lowest balance until the next payday. Past ones are the bank's; future ones are the forecast's
  * likely path (y) and its bad and good case (lo, hi: the 10th and 90th percentile of the futures). */
-type Point = { t: number; date: string; past: boolean; y: number; lo: number; hi: number; clears: number; base: number | null };
+type Point = { t: number; date: string; past: boolean; y: number; lo: number; hi: number; clears: number };
 
-function points(f: Forecast, compare: boolean): Point[] {
+function points(f: Forecast): Point[] {
   const end = time(f.window_end);
-  const base = new Map((f.base_paydays ?? []).map((p) => [p.date, p.p50]));
   return [
     ...f.history.paydays.map((p) => ({
-      t: time(p.date), date: p.date, past: true, y: p.low_cents, lo: p.low_cents, hi: p.low_cents, clears: 1, base: null,
+      t: time(p.date), date: p.date, past: true, y: p.low_cents, lo: p.low_cents, hi: p.low_cents, clears: 1,
     })),
     ...f.paydays
       .filter((p) => time(p.date) <= end)
       .map((p) => ({
         t: time(p.date), date: p.date, past: false, y: p.p50, lo: p.p10, hi: p.p90, clears: p.clears,
-        base: compare ? (base.get(p.date) ?? null) : null,
       })),
   ];
 }
 
 function readout(p: Point) {
   if (p.past) return `${mediumDate(p.date)}: ${cash(p.y)} left after payroll.`;
-  const base = p.base === null ? "" : ` If nothing changes, ${cash(p.base)}.`;
-  return `${mediumDate(p.date)} payday: likely ${cash(p.y)} left after payroll, ${cash(p.hi)} in the good case and ${cash(p.lo)} in the bad case. ${percent(p.clears)} chance payroll clears.${base}`;
+  return `${mediumDate(p.date)} payday: likely ${cash(p.y)} left after payroll, ${cash(p.hi)} in the good case and ${cash(p.lo)} in the bad case. ${percent(p.clears)} chance payroll clears.`;
 }
 
 /** Where a path runs out: a ring on the band's edges (bad and good case), a red dot on the likely line. */
@@ -66,8 +63,8 @@ function RunOut({ f }: { f: Forecast }) {
   );
 }
 
-export function CashChart({ f, compare, table }: { f: Forecast; compare: boolean; table: boolean }) {
-  const pts = points(f, compare);
+export function CashChart({ f, table }: { f: Forecast; table: boolean }) {
+  const pts = points(f);
   const past = f.history.paydays;
   const first = past[0];
   const last = past[past.length - 1];
@@ -101,7 +98,6 @@ export function CashChart({ f, compare, table }: { f: Forecast; compare: boolean
             items={[
               { key: <LineKey color="var(--color-ballpoint)" />, label: "Cash left after payroll" },
               { key: <SwatchKey color="var(--color-ballpoint)" opacity={0.25} />, label: "8 in 10 futures" },
-              ...(compare ? [{ key: <LineKey color="var(--color-ghost)" dashed />, label: "If nothing changes" }] : []),
               { key: <LineKey color="var(--color-serial)" dashed />, label: "One payroll plus rent" },
             ]}
           />
@@ -130,7 +126,7 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
   const plotH = H - M.bottom - M.top;
 
   const top = Math.max(f.cash_today_cents, ...pts.map((p) => p.hi)) * 1.06;
-  const lowest = Math.min(0, ...pts.map((p) => Math.min(p.lo, p.base ?? 0)));
+  const lowest = Math.min(0, ...pts.map((p) => p.lo));
   const bottom = Math.max(lowest, -0.42 * top) - 0.04 * top; // a deep shortfall is cut off so it can't flatten the rest
   const y = linear(bottom, top, H - M.bottom, M.top);
   const x0 = pts[0].t - 8 * DAY;
@@ -146,8 +142,6 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
   const goodEdge = path(ahead.map((p) => [x(p.t), y(p.hi)]));
   const badEdge = path(ahead.map((p) => [x(p.t), y(p.lo)]));
   const band = `${goodEdge}${path([...ahead].reverse().map((p) => [x(p.t), y(p.lo)])).replace("M", "L")}Z`;
-  const compare = ahead.some((p) => p.base !== null);
-  const baseLine = path(ahead.map((p, i) => [x(p.t), y(i === 0 ? p.y : (p.base ?? p.y))]));
 
   /** A path's value on any day, read between paydays. */
   const valueAt = (t: number, key: "lo" | "y" | "hi") => {
@@ -248,9 +242,6 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
             <path d={band} fill="var(--color-ballpoint)" fillOpacity={0.16} />
             <path d={goodEdge} fill="none" stroke="var(--color-ballpoint)" strokeOpacity={0.45} strokeWidth={1} />
             <path d={badEdge} fill="none" stroke="var(--color-ballpoint)" strokeOpacity={0.45} strokeWidth={1} />
-            {compare && (
-              <path d={baseLine} fill="none" stroke="var(--color-ghost)" strokeWidth={2} strokeDasharray="6 5" strokeLinecap="round" />
-            )}
             <path d={line} fill="none" stroke="var(--color-ballpoint)" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
           </g>
           {marks.map((m) => (
@@ -281,9 +272,6 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
           {p && at !== null && (
             <g>
               <line x1={xs[at]} x2={xs[at]} y1={M.top} y2={H - M.bottom} stroke="var(--color-carbon)" strokeOpacity={0.4} />
-              {p.base !== null && (
-                <circle cx={xs[at]} cy={clampY(p.base)} r={4.5} fill="var(--color-ghost)" stroke="var(--color-paper)" strokeWidth={2} />
-              )}
               <circle cx={xs[at]} cy={clampY(p.y)} r={5} fill="var(--color-ballpoint)" stroke="var(--color-paper)" strokeWidth={2} />
             </g>
           )}
@@ -320,14 +308,6 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
               <p className="mt-0.5 pl-[30px]">
                 <strong>{percent(p.clears)}</strong> <span className="text-pencil">chance payroll clears</span>
               </p>
-              {p.base !== null && (
-                <p className="mt-0.5 flex items-center gap-2">
-                  <LineKey color="var(--color-ghost)" dashed />
-                  <span>
-                    <strong>{cash(p.base)}</strong> <span className="text-pencil">if nothing changes</span>
-                  </span>
-                </p>
-              )}
             </>
           )}
         </Tooltip>

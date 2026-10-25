@@ -10,8 +10,8 @@ const price = (cents: number) => (cents % 100 ? moneyExact(cents) : money(cents)
 /** A dish and price the owner arrived with (the Chat's "Set Funghi Pizza to $25 on the dashboard" button). */
 export type Focus = { dish: string; price: number | null };
 
-/** Brings `ref` to the middle of the screen and keeps it there while the page above it is still loading (the charts, the
- * what-ifs and the review grow after it appears), until the owner scrolls, clicks or presses a key, or 6 seconds pass. */
+/** Brings `ref` to the middle of the screen and keeps it there while the page above it is still loading (the charts and
+ * the review grow after it appears), until the owner scrolls, clicks or presses a key, or 6 seconds pass. */
 function useKeepInView(ref: RefObject<HTMLElement | null>, active: boolean, key?: unknown) {
   useEffect(() => {
     const el = ref.current;

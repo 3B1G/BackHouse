@@ -1,13 +1,22 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { IconArrowUpRight } from "@tabler/icons-react";
-import { askChat, recall, remember, type ChatLink, type ChatTurn } from "../api";
+import { askChat, recall, remember, type ChatLink, type ChatSection, type ChatTurn } from "../api";
 import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
 import { CheckMark } from "../components/Header";
 
 // needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model;
-// links: buttons to a change on the dashboard, where the owner approves, declines or sets the price.
-type Message = ChatTurn & { sources?: string[]; failed?: boolean; offTopic?: boolean; needsData?: boolean; info?: boolean; links?: ChatLink[] };
+// links: buttons to a change on the dashboard, where the owner approves, declines or sets the price; sections: the parts
+// of the dashboard the answer relates to.
+type Message = ChatTurn & {
+  sources?: string[];
+  failed?: boolean;
+  offTopic?: boolean;
+  needsData?: boolean;
+  info?: boolean;
+  links?: ChatLink[];
+  sections?: ChatSection[];
+};
 
 const SUGGESTIONS = [
   "When do we run out of cash?",
@@ -113,7 +122,14 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
         else if (e.type === "answer")
           setMessages((m) => [
             ...m,
-            { role: "assistant", content: e.text || "I couldn't find an answer to that.", sources: e.sources, offTopic: e.off_topic, links: e.links },
+            {
+              role: "assistant",
+              content: e.text || "I couldn't find an answer to that.",
+              sources: e.sources,
+              offTopic: e.off_topic,
+              links: e.links,
+              sections: e.sections,
+            },
           ]);
         else setMessages((m) => [...m, { role: "assistant", content: e.text, failed: true }]);
       });
@@ -280,6 +296,27 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
                       </li>
                     ))}
                 </ul>
+              )}
+              {!!m.sections?.length && (
+                <div className="mt-3">
+                  <p className="text-sm font-bold text-ink">See it on the dashboard</p>
+                  <ul className="mt-1.5 flex flex-wrap gap-2">
+                    {m.sections
+                      .filter((l) => l.href.startsWith("#/?section="))
+                      .map((l) => (
+                        <li key={l.id}>
+                          <a
+                            href={l.href}
+                            className="inline-flex min-h-11 items-center gap-1.5 rounded-md border-2 border-ink bg-paper px-3 text-[0.9375rem] font-bold text-ink no-underline transition-colors duration-150 hover:bg-check"
+                          >
+                            {l.label}
+                            <span className="sr-only">: {l.detail}</span>
+                            <span aria-hidden="true">→</span>
+                          </a>
+                        </li>
+                      ))}
+                  </ul>
+                </div>
               )}
               {m.offTopic && i === messages.length - 1 && !busy && (
                 <ul className="mt-3 flex flex-wrap gap-2">

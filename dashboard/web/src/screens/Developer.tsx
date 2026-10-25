@@ -273,7 +273,7 @@ export function Developer() {
           </h2>
           <p className="mt-1 max-w-[72ch] text-[0.9375rem] text-pencil">
             The Orchestrator runs a check by calling six agents in order, then has Changes dry-run the fixes it suggests. The Chat agent answers questions with a scope check, ASI:One and
-            read-only tools, and reaches the Forecaster through its what-if tool. The dashboard's what-ifs call the Forecaster directly.
+            read-only tools, and reaches the Forecaster through its what-if tool.
           </p>
           <AgentMap events={visible} now={now} />
           <ul className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm text-carbon">
