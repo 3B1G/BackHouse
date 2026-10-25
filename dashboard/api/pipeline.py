@@ -278,11 +278,19 @@ def _execute(run, upload):
             _step(run, "bookkeeper", "done", f"Confirmed {len(findings)} problems", findings=len(findings),
                   rejected=len(rejected), report=reports[-1].name)
 
-        forecast.use_adjustments(passed)       # every forecast from here on, what-ifs and Chat included, uses them
-        _step(run, "forecast", "working", "Running 1,000 futures" + (f" with {len(passed)} verified fixes" if passed else ""))
+        # One forecast everywhere: once the owner has signed a review, the orchestrator's inputs (the findings they accepted,
+        # the review's date); before that, the verified fixes as above. Every forecast from here on, the Chat's included,
+        # uses them.
+        counted = orchestrator_bridge.sync_forecast(run.id)
+        if not counted:
+            forecast.use_adjustments(passed)
+        _step(run, "forecast", "working", "Running 1,000 futures" + (f" with the {counted} findings you accepted" if counted
+                                                                     else f" with {len(passed)} verified fixes" if passed else ""))
         base = forecast.run(group=run.id)
-        _check(run, "forecast", "pass" if passed else "pending",
-               f"Counts {len(passed)} verified Bookkeeper fixes" if passed else "No verified Bookkeeper fixes yet, so it uses your records as they are")
+        _check(run, "forecast", "pass" if counted or passed else "pending",
+               f"Counts the {counted} findings you accepted in your signed review, from {_day(base['as_of'])}, like the orchestrator"
+               if counted else f"Counts {len(passed)} verified Bookkeeper fixes" if passed
+               else "No signed review yet, so it uses your records as they are")
         _check(run, "forecast", "pass", f"1,000 futures in {base['runtime_ms']} ms")
         pays = base["paydays"]
         risky = next((i for i, p in enumerate(pays) if p["clears"] < 0.95), len(pays))

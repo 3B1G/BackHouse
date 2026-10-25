@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 import core
 from core import DATA, TAG, UPLOADS
+import forecast
 import orchestrator_bridge
 import pipeline
 import tracelog
@@ -96,6 +97,14 @@ def run_events(run_id: str):
         raise HTTPException(404, "That check isn't running anymore. Start a new one.")
     return StreamingResponse(run.stream() if run else pipeline.replay(events), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.get("/api/forecast")
+def base_forecast():
+    """The forecast as it stands, on the orchestrator's inputs once a review is signed: the dashboard redraws its charts
+    with it after the owner signs, and when it reopens an older check."""
+    orchestrator_bridge.sync_forecast("dashboard")
+    return forecast.run(group="dashboard")
 
 
 @app.get("/api/dev/trace")

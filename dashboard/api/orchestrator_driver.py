@@ -199,6 +199,50 @@ def owner(mode, session, args):
     return owner_status(session)
 
 
+def context(session):
+    """What the Chat and the dashboard's forecast need from the orchestrator, read-only: the stage and the owner's review,
+    the forecast inputs it uses once the review is signed (the accepted findings and the review's date), its base
+    forecast, the approved changes still to start, and the open suggestions."""
+    from orchestrator import review, stages
+    from orchestrator.api import list_suggestions
+
+    view = stages.current(session)
+    st = review.status(session)
+    made = [f["proposal"]["decision"] for f in st["findings"] if f.get("proposal")]
+    out = {"stage": view.stage, "why": view.why, "inputs": None, "forecast": None,
+           "review": {"open": len(st["findings"]), "accepted": made.count("accept"), "dismissed": made.count("dismiss"),
+                      "revise": made.count("revise"), "signed": bool(st["committed"])}}
+    try:
+        _, adjustments, note, as_of = tools._inputs(session)       # refuses before the review is signed
+    except Exception as exc:
+        out["inputs_note"] = str(exc)[:200]
+    else:
+        out["inputs"] = {"as_of": str(as_of) if as_of else None, "note": note,
+                         "adjustments": [a.model_dump(mode="json") for a in adjustments]}
+        base = tools.call(session, "forecast_base", {})
+        if "error" not in base:
+            out["forecast"] = {k: base.get(k) for k in ("as_of", "run_out_likely", "run_out_worst", "run_out_best",
+                                                        "below_floor_likely", "share_running_out", "trials")}
+    up = tools.call(session, "list_upcoming_changes", {})
+    out["upcoming"] = up.get("changes", []) if "error" not in up else []
+    try:
+        items, _ = list_suggestions(session, preview=False, limit=20)
+    except Exception:
+        items = []
+    out["suggestions"] = [{k: i.get(k) for k in ("id", "title", "action", "target", "old_price", "new_price")} for i in items]
+    return out
+
+
+def read_menu(session):
+    """The menu as the price database has it today, and the approved changes that haven't started. Read-only."""
+    m = tools.call(session, "get_menu", {})
+    if "error" in m:
+        raise ValueError(m["error"])
+    up = tools.call(session, "list_upcoming_changes", {})
+    return {"on": m.get("on"), "prices_as_of": m.get("prices_as_of"), "dishes": m.get("dishes", []),
+            "upcoming": up.get("changes", []) if "error" not in up else []}
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "brief"
     session = Session(root=LAB)                  # offline: Market scout reads the saved menu pages
@@ -211,6 +255,10 @@ def main():
         elif mode == "ask":
             out = asyncio.run(turn(session, sys.stdin.read()))
             emit(kind="done", **out, proposals=proposals(session))
+        elif mode == "context":
+            emit(kind="done", **context(session))
+        elif mode == "menu":
+            emit(kind="done", **read_menu(session))
         elif mode == "scenario":                 # one what-if on the Forecaster's 1,000 futures, for the Chat
             emit(kind="done", **tools.call(session, "forecast_scenario", {"scenario": json.loads(sys.stdin.read() or "{}")}))
         elif mode in OWNER_MODES:

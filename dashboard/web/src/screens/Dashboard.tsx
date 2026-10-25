@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  api,
   followRun,
   owner,
   recall,
@@ -77,13 +78,18 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; o
       .catch(() => setReview(null));
   }, [plan]);
 
-  // After the owner signs a review, the orchestrator's next brief opens the suggestions.
+  // After the owner signs a review (or an older check reopens): the orchestrator's suggestions as they are now, and the
+  // forecast redrawn on the same inputs the orchestrator and the Chat use, so every date on the page agrees.
   const refreshPlan = () => {
     setPlanError(null);
     owner
       .plan()
       .then(setPlan)
       .catch((err) => setPlanError((err as Error).message));
+    api
+      .forecast()
+      .then(setShown)
+      .catch(() => {}); // the check's own forecast stays on screen
   };
 
   // Arriving from the Chat: the latest suggestions, even when the check that made them is gone.

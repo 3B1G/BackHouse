@@ -37,12 +37,20 @@ RISKS = [  # what could go wrong: (id, title, detail, contracts.Scenario fields)
 ]
 _RESULTS, _MENU, _HISTORY = {}, {}, {}
 _ADJUSTMENTS = []      # the latest check's verified Bookkeeper fixes; every forecast and what-if uses them
+_AS_OF = None          # the day the forecast starts: the signed review's date, else the latest bank day
 
 
 def use_adjustments(adjustments):
     """Set by each check: the Bookkeeper adjustments the verifier passed (contracts.passed_adjustments)."""
-    global _ADJUSTMENTS
-    _ADJUSTMENTS = list(adjustments or [])
+    use_inputs(adjustments, None)
+
+
+def use_inputs(adjustments, as_of=None):
+    """The orchestrator's inputs once the owner signs a review (orchestrator_bridge.sync_forecast): the adjustments from
+    the findings the owner accepted, and the review's date. The charts, paydays and the Chat then show the same forecast
+    as the orchestrator."""
+    global _ADJUSTMENTS, _AS_OF
+    _ADJUSTMENTS, _AS_OF = list(adjustments or []), (date.fromisoformat(str(as_of)[:10]) if as_of else None)
 
 
 def _dollars(cents):
@@ -212,7 +220,7 @@ def simulate(kw, adjustments=None, group=None):
     adjustments = _ADJUSTMENTS if adjustments is None else adjustments
     adj_key = tuple(a.model_dump_json() for a in adjustments or [])
     scenario_key = K.Scenario(name="what if", **kw).model_dump_json() if kw else ""
-    key = (scenario_key, adj_key, F._stamp())
+    key = (scenario_key, adj_key, str(_AS_OF), F._stamp())
     label = "1,000 futures, " + (", ".join(sorted(kw)) if kw else "no what-ifs")
     with LOCK:
         if key in _RESULTS:
@@ -221,7 +229,7 @@ def simulate(kw, adjustments=None, group=None):
         span = tracelog.Span("Forecaster", label, group, scenario=kw or None)
         t0 = time.perf_counter()
         S = dict(F.DEFAULTS)
-        prep = F.prepare(None, "none", S, adjustments or None)
+        prep = F.prepare(_AS_OF, "none", S, adjustments or None)
         base_paths, base = F._run(prep, S)
         paths, summ, vs = base_paths, base, None
         if kw:
