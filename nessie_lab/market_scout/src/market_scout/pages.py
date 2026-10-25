@@ -72,6 +72,10 @@ class FetchError(ValueError):
     """The URL or the response broke a fetch rule; the page is skipped and noted as a limitation."""
 
 
+class OfflineMiss(FetchError):
+    """Offline mode and no saved copy of this page: it is skipped and noted, nothing is fetched."""
+
+
 class Snapshot:
     """A saved page: raw bytes on disk plus the visible text the extractors and checks read."""
 
@@ -483,11 +487,13 @@ def public_address(host: str, port: int, resolver) -> str:
 
 # ---------------------------------------------------------------- the store
 class PageStore:
-    def __init__(self, directory: Path, client: httpx.Client | None = None, resolver=None, clock=time.monotonic):
+    def __init__(self, directory: Path, client: httpx.Client | None = None, resolver=None, clock=time.monotonic,
+                 offline=False):
         self.dir = Path(directory)
         self.client = client
         self.resolver = resolver or system_resolver
         self.clock = clock
+        self.offline = offline                            # True: saved copies only, never a client or a DNS lookup
 
     def _paths(self, url):
         key = hashlib.sha256(url.encode()).hexdigest()[:16]
@@ -516,11 +522,31 @@ class PageStore:
         return Snapshot(url, raw, text, datetime.fromisoformat(meta["retrieved_at"]), hashlib.sha256(data).hexdigest(),
                         all_text, final_url=final)
 
-    def get(self, url: str, refresh=False) -> Snapshot:
+    def saved(self, url: str) -> dict | None:
+        """The saved copy's metadata ({"retrieved_at": datetime, "kind", "final_url"}) if both the metadata and the
+        raw file are on disk, else None. Reads no page and touches no network (for `market-scout pages`)."""
+        meta_path, _ = self._paths(url)
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            if not self._raw_path(meta.get("file")).is_file():
+                return None
+            return {"retrieved_at": datetime.fromisoformat(meta["retrieved_at"]), "kind": meta.get("kind"),
+                    "final_url": meta.get("final_url") or url}
+        except (OSError, ValueError, KeyError, TypeError, AttributeError, FetchError):
+            return None
+
+    def get(self, url: str, refresh=False, offline=None) -> Snapshot:
         """Saved snapshot unless refresh and it is older than REFRESH_AGE. HTML and text PDFs; raises on delivery
-        apps, unsafe URLs, HTTP errors, oversize or unexpected content and image-only menus."""
+        apps, unsafe URLs, HTTP errors, oversize or unexpected content and image-only menus.
+        Offline (this call's `offline`, or the store's): the saved snapshot whatever its age and whatever refresh
+        says; no saved copy raises OfflineMiss. No HTTP client is built and no name is resolved."""
+        offline = self.offline if offline is None else (offline or self.offline)
         check_url(url)
         meta_path, key = self._paths(url)
+        if offline:
+            if not meta_path.exists():
+                raise OfflineMiss("offline, no saved copy")
+            return self._cached(url, meta_path)
         if meta_path.exists():
             snap = self._cached(url, meta_path)
             age = datetime.now(timezone.utc) - snap.retrieved_at.astimezone(timezone.utc)
@@ -544,6 +570,8 @@ class PageStore:
 
     def fetch(self, url: str):
         """-> (body, kind, encoding, final_url, status). Every hop is checked; the whole fetch has one deadline."""
+        if self.offline:                                  # get() never calls this offline; a direct call is refused too
+            raise OfflineMiss("offline: no page is fetched")
         deadline = self.clock() + DEADLINE
         client = self.client or httpx.Client(headers=HEADERS, follow_redirects=False, trust_env=False)
         try:

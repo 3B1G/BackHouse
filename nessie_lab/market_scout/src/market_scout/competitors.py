@@ -147,8 +147,12 @@ def tidy_rows(rows, skipped: list | None = None) -> list[dict]:
     return out
 
 
-def apify_rows(here: dict, token: str, cache: Path | None = None, refresh=False, now=None) -> list[dict]:
-    """Google Maps rows, from the cache unless (refresh and the cache is over 24 h old) or there is no cache."""
+def apify_rows(here: dict, token: str, cache: Path | None = None, refresh=False, now=None, offline=False,
+               notes: list | None = None) -> list[dict]:
+    """Google Maps rows, from the cache unless (refresh and the cache is over 24 h old) or there is no cache.
+    Offline: the cache whatever its age (and whatever refresh says), else no rows; Apify is never called."""
+    if offline:
+        return offline_apify_rows(here, cache, notes)
     now = now or datetime.now(timezone.utc)
     saved = None
     if cache is not None and Path(cache).exists():
@@ -176,8 +180,36 @@ def apify_rows(here: dict, token: str, cache: Path | None = None, refresh=False,
     return rows
 
 
+def offline_apify_rows(here: dict, cache: Path | None, notes: list | None = None) -> list[dict]:
+    """The cached Google Maps rows for this location, or none; a note says which. No network."""
+    def note(text):
+        if notes is not None:
+            notes.append(text)
+
+    try:
+        saved = json.loads(Path(cache).read_text(encoding="utf-8")) if cache is not None else None
+        if saved is None:
+            raise FileNotFoundError
+        if not isinstance(saved, dict) or not isinstance(saved.get("rows"), list) or not isinstance(saved["at"], str):
+            raise TypeError("Apify cache has the wrong shape")
+        saved_at = datetime.fromisoformat(saved["at"])
+        if saved.get("here") != [here["lat"], here["lng"]]:
+            raise ValueError("Apify cache is for another location")
+        rows = tidy_rows(saved["rows"])
+    except FileNotFoundError:
+        note("offline: Apify (Google Maps) discovery skipped; no cached list, so no Google Maps competitors")
+        return []
+    except (ValueError, KeyError, TypeError, OSError, RecursionError):
+        note("offline: Apify (Google Maps) discovery skipped; the cached list is unusable, so no Google Maps "
+             "competitors")
+        return []
+    note(f"offline: Apify (Google Maps) discovery skipped; using the cached list from {saved_at.date().isoformat()}")
+    return rows
+
+
 def find_competitors(here: dict, known: list[dict], use_apify=None, cache: Path | None = None,
-                     refresh=False, skipped: list | None = None) -> list[tuple[Competitor, dict]]:
+                     refresh=False, skipped: list | None = None, offline=False,
+                     notes: list | None = None) -> list[tuple[Competitor, dict]]:
     """-> [(candidate with its verdict, its row)]. A row has `id` when it is already in the database; Apify rows that
     match a known restaurant by name or menu domain are merged into it, not added twice. Apify-found competitors are
     never trusted (see analyze), even once they are in the database."""
@@ -194,7 +226,7 @@ def find_competitors(here: dict, known: list[dict], use_apify=None, cache: Path 
     if token:
         names = {r["name"].lower() for r in rows}
         domains = {domain(r.get("menu_url")) for r in rows} - {None}
-        for i, r in enumerate(apify_rows(here, token, cache, refresh)):
+        for i, r in enumerate(apify_rows(here, token, cache, refresh, offline=offline, notes=notes)):
             try:                                          # one bad row is skipped (and logged), not the scan
                 r = tidy(r)
                 d = domain(r["menu_url"])
