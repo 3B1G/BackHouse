@@ -23,7 +23,33 @@ class ReportResult(Contract):
     report_id: str
     filename: str
     as_of: date
-    verified: Literal[False] = False
+    verified: bool = False
+
+
+class Drafted(Contract):
+    """Bookkeeper's assembled draft, saved and waiting for the Verifier; it is not a report yet."""
+    request_id: str
+    report_id: str
+    draft: str
+    as_of: date
+    round: int = Field(default=1, ge=1)              # 1 = the first draft; later rounds answer the Verifier's feedback
+
+
+class VerifyRequest(Contract):
+    """Bookkeeper -> Verifier: compare this saved draft with the Verifier's own investigation."""
+    request_id: str = Field(min_length=1, max_length=128)
+    report_id: str = Field(pattern=r"^R-[0-9a-f]{64}$")
+    draft: str
+    round: int = Field(default=1, ge=1)
+
+
+class RevisionRequest(Contract):
+    """Verifier -> Bookkeeper: redo the batches named in the feedback file and send draft `round` back."""
+    type: Literal["revise"] = "revise"
+    request_id: str = Field(min_length=1, max_length=128)
+    report_id: str = Field(pattern=r"^R-[0-9a-f]{64}$")
+    round: int = Field(ge=2)
+    feedback: str
 
 
 class Window(Contract):
@@ -45,10 +71,11 @@ class AgentInfo(Contract):
 
 
 class Verification(Contract):
-    passed: Literal[False] = False
-    checked_at: None = None
-    findings_checked: Literal[0] = 0
-    findings_rejected: Literal[0] = 0
+    passed: bool = False                                # true on every report the Verifier publishes
+    checked_at: datetime | None = None
+    findings_checked: Count = 0
+    findings_rejected: Count = 0                        # the Bookkeeper's findings not published as it wrote them
+    rounds: Count = 0                                   # comparisons run (each later one after a Bookkeeper revision)
     notes: list[str] = Field(default_factory=lambda: ["Verification was not run; this is an unverified Bookkeeper report."])
 
 
@@ -166,11 +193,12 @@ class Balances(Contract):
 class Report(Draft):
     report_id: str
     request_id: str
-    schema_version: Literal["1.1"] = "1.1"
+    schema_version: Literal["1.1", "1.2"] = "1.2"
     generated_at: datetime
     as_of: date
     window: Window
     sources: Sources
     bookkeeper: AgentInfo
+    verifier: AgentInfo | None = None
     verification: Verification = Field(default_factory=Verification)
     balances: Balances

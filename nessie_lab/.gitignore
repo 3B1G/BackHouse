@@ -32,6 +32,10 @@ data/*.seal.json
 .venv/
 .pytest_cache/
 data/reports/
+data/drafts/
 data/bookkeeper_traces/
+data/verifier_traces/
+data/verifier_drafts/
+data/verifications/
 private_keys.json
 *_data.json

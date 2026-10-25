@@ -57,6 +57,7 @@ class SnapshotTools:
         self.bank_path, self.books_path = self.session.bank_path, self.session.books_path
         self.as_of, self.start = self.session.cutoff, self.session.start
         self.bank_rows = self.session.bank_rows
+        self.bank_ids = frozenset(self.session.bank.bank_id)          # every bank row through the cutoff (the Verifier's check)
         self.limitations = list(self.session.limitations)
         if note := manifest_mismatch(Path(root), tag, self.session):
             LOG.warning(note)

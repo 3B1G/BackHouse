@@ -86,8 +86,9 @@ def test_distant_or_different_findings_stay_separate():
     other = finding("C", root_cause="commission_overcharge", counterparty="RapidPlate", bank_ids=("y",))
     corrections = [finding("D", root_cause="supplier_overcharge", counterparty="Supplier", bank_ids=("p",), kind="correct_to"),
                    finding("E", root_cause="supplier_overcharge", counterparty="Supplier", bank_ids=("q",), kind="correct_to")]
-    draft, _ = assemble_draft([(b("x"), result(*far, other, *corrections))], [], bank_rows=1000)
+    draft, info = assemble_draft([(b("x"), result(*far, other, *corrections))], [], bank_rows=1000)
     assert [f.id for f in draft.findings] == ["F1", "F2", "F3", "F4", "F5"]
+    assert info["origin"] == {f"F{n}": ["x"] for n in range(1, 6)}
 
 
 def test_exclude_findings_union_their_rows():
@@ -97,6 +98,24 @@ def test_exclude_findings_union_their_rows():
     draft, _ = assemble_draft([(b("s"), result(one)), (b("r"), result(two))], [], bank_rows=1000)
     [f] = draft.findings
     assert f.treatment.bank_ids == ["d1", "d2"] and f.amounts.impact_cents == 120
+
+
+def test_same_rows_seen_by_two_batches_are_not_counted_twice():
+    def charge(id, impact=34900, confidence=0.9):
+        f = finding(id, root_cause="unrecorded_charge", counterparty="TableTap POS", first="2026-07-09", last="2026-07-09",
+                    bank_ids=("h1",), kind="exclude", impact=impact, confidence=confidence)
+        f["amounts"].update(expected_cents=0, actual_cents=impact)
+        return f
+    draft, info = assemble_draft([(b("recurring_obligations"), result(charge("RO-01"))),
+                                  (b("unrecorded_charges"), result(charge("UNR-001", confidence=0.8)))], [], bank_rows=1000)
+    [f] = draft.findings
+    assert f.treatment.bank_ids == ["h1"] and f.amounts.impact_cents == 34900 and f.amounts.actual_cents == 34900
+    assert draft.summary.total_impact_cents == 34900 and f.confidence == 0.8 and info["merged"] == [["RO-01", "UNR-001", "unrecorded_charges"]]
+    assert info["origin"] == {"F1": ["recurring_obligations", "unrecorded_charges"]}
+    partial = [result(charge("A", impact=500) | {"bank_ids": ["h1", "h2"], "treatment": {"kind": "exclude", "bank_ids": ["h1", "h2"]}}),
+               result(charge("B", impact=300) | {"bank_ids": ["h2"], "treatment": {"kind": "exclude", "bank_ids": ["h2"]}})]
+    draft, _ = assemble_draft([(b("one"), partial[0]), (b("two"), partial[1])], [], bank_rows=1000)
+    assert [f.amounts.impact_cents for f in draft.findings] == [500]         # overlapping rows: the larger view, not 800
 
 
 def test_conflicting_treatments_keep_the_more_confident_and_say_so():
@@ -153,11 +172,13 @@ def _no_rows(raw):
     (lambda raw: raw.update(books_refs=["DOC-1"], treatment=dict(kind="owed", cents=0, due="2026-10-24")), "owed cents is not above zero"),
     (lambda raw: raw.update(bank_ids=["zzz"]), "no tool returned in this batch: zzz"),
     (lambda raw: raw.update(treatment=dict(kind="exclude", bank_ids=["a", "made-up"])), "no tool returned in this batch: made-up"),
+    (lambda raw: raw.update(treatment=dict(kind="correct_to", bank_id="a", cents=100)),
+     "duplicate_charge findings take the exclude treatment, not correct_to"),
 ])
 def test_finding_problems_mirror_the_contracts_hand_off(edit, problem):
     from bookkeeper.batches import finding_problems
     from bookkeeper.contracts import Finding
-    raw = finding("F", kind="exclude")
+    raw = finding("F", root_cause="duplicate_charge", kind="exclude")
     edit(raw)
     problems = finding_problems(Finding.model_validate(raw), seen={"a"})
     assert any(problem in p for p in problems), problems
@@ -166,6 +187,29 @@ def test_finding_problems_mirror_the_contracts_hand_off(edit, problem):
 def test_valid_findings_have_no_problems():
     from bookkeeper.batches import finding_problems
     from bookkeeper.contracts import Finding
-    for raw in [finding("A", kind="exclude"), finding("B", kind="ongoing"), finding("C", kind="correct_to"),
-                dict(finding("D", kind="owed", bank_ids=("a",)), books_refs=["DOC-1"])]:
+    for raw in [finding("A", root_cause="duplicate_charge", kind="exclude"), finding("B", kind="ongoing"),
+                finding("C", root_cause="supplier_overcharge", kind="correct_to"),
+                dict(finding("D", root_cause="missed_payment", kind="owed", bank_ids=("a",)), books_refs=["DOC-1"])]:
         assert finding_problems(Finding.model_validate(raw), seen={"a"}) == []
+
+
+def test_every_root_cause_has_one_treatment_and_the_prompt_says_which():
+    from typing import get_args
+
+    from bookkeeper.batches import CORE, TREATMENT
+    from bookkeeper.contracts import Finding
+    assert set(TREATMENT) == set(get_args(Finding.model_fields["root_cause"].annotation))
+    for cause, kind in TREATMENT.items():
+        assert f"- {cause}: {kind} (" in CORE
+    assert "one finding per row" in CORE
+
+
+def test_invoiced_price_increases_are_not_findings(root):
+    from bookkeeper.batches import CORE
+    session = ToolSession(root, "boh-1loc", CUTOFF, mode="historical")
+    try:
+        supplier = next(b for b in plan_batches(session) if b.id.startswith("supplier:"))
+    finally:
+        session.close()
+    assert "price change, not an error" in supplier.brief and "never as a finding" in supplier.brief
+    assert "supplier_overcharge means a payment above its invoice" in CORE

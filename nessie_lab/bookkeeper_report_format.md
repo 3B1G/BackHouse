@@ -192,6 +192,11 @@ The `T…`, `…` and `0` values are placeholders: fill them from the real data.
 | `ongoing` | `since`, `monthly_cents` | Keeps costing money in the base forecast; stops in "with fixes" | Card fee 2.9% instead of 2.6% since Aug 1 |
 | `owed` | `cents`, `due` | Adds money about to go out | The invoice that was never paid |
 
+The treatment is fixed by the root cause: `duplicate_charge` and `unrecorded_charge` → `exclude`;
+`supplier_overcharge`, `commission_overcharge` and `cash_deposit_short` → `correct_to`; `card_fee_creep` →
+`ongoing`; `missed_payment` → `owed`. A `correct_to` names one bank row, so several affected rows (the 3 weeks of
+commission) are one finding per row.
+
 **The report never changes today's cash.** The bank balance is real. Findings only change what the Forecaster learns and what it expects next. Possible refunds belong in the "with fixes" scenario, not the base case.
 
 ---
@@ -203,14 +208,20 @@ The `T…`, `…` and `0` values are placeholders: fill them from the real data.
 4. **Keep the backtest honest:** for a backtest at `as_of = 2026-07-24`, the Bookkeeper runs on data up to that date only.
 5. **Never use the answer key** (`data/grader/`) or the `|ref=` tags to build a report.
 
-## Implemented Bookkeeper V1 (schema 1.1)
+## Implemented Bookkeeper and Verifier (schema 1.2)
 
-The `bookkeeper/` subproject implements the producer only. The independent
-Bookkeeper-verifier and the planned three-round comparison loop are future work.
-V1 saves reports without evidence/financial verification: `verification.passed`
-is always `false`, `checked_at` is `null`, `findings_checked` and
-`findings_rejected` are zero, and `notes` states that verification was not run.
-Pydantic enforces the output shape only. Do not use these as verified Forecaster inputs.
+The `bookkeeper/` subproject implements the producer and an independent Verifier
+agent. The Bookkeeper saves a draft (`data/drafts/`). The Verifier repeats the same
+investigation without seeing the draft's findings and compares the two in code: same
+root cause and rows, documents or counterparty, same treatment, amounts within $10 or 5%.
+Each disagreement goes back to the Bookkeeper batch concerned as feedback, and the
+Bookkeeper redoes those batches, for up to 3 comparisons in all. Whatever is still
+disputed is settled in the Verifier's favour: its version of a disputed finding and its
+findings the Bookkeeper missed are published, and Bookkeeper findings it could not find
+are left out. `verification.passed` is `true` on every published report; `rounds`,
+`findings_checked`, `findings_rejected` and `notes` say how it was reached, and a
+`verifier` block (version, model, trace_id) sits beside `bookkeeper`. Schema 1.1 reports
+(saved before the Verifier) remain unverified.
 
 The contract adds:
 

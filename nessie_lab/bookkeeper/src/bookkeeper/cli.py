@@ -1,4 +1,4 @@
-"""CLI for report generation, serving, local orchestration, and offline flag export."""
+"""CLI for report generation and verification, serving, local orchestration, and offline flag export."""
 import argparse
 import asyncio
 import json
@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from .contracts import Report, ReportRequest
 from .runner import Bookkeeper, immutable_json
 from .tools import read_database
+from .verifier import Verifier, verify_in_process
 
 
 def export_flags(root: Path, report_path: Path, output: Path):
@@ -36,6 +37,13 @@ def export_flags(root: Path, report_path: Path, output: Path):
     immutable_json(output, flags)
 
 
+async def verified(root: Path, request: ReportRequest | None = None, trace_id: str | None = None):
+    """Run or resume the Bookkeeper, then verify its draft in this process; no agents are needed."""
+    bookkeeper = Bookkeeper(root, model=os.getenv("ASI_MODEL", "asi1"))
+    outcome = await (bookkeeper.run(request) if request else bookkeeper.resume(trace_id))
+    return await verify_in_process(bookkeeper, Verifier(root), outcome)
+
+
 def main():
     """Run the selected command with repository-relative data and shared report paths."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s")
@@ -53,6 +61,10 @@ def main():
             p.add_argument("--endpoint", default="http://127.0.0.1:8001/submit")
     serve = commands.add_parser("serve")
     serve.add_argument("--port", type=int, default=8001)
+    serve_verifier = commands.add_parser("serve-verifier")
+    serve_verifier.add_argument("--port", type=int, default=8003)
+    verify = commands.add_parser("verify")
+    verify.add_argument("--report-id", required=True, help="R-... of a saved draft under data/drafts")
     resume = commands.add_parser("resume")
     resume.add_argument("--trace-id", required=True)
     export = commands.add_parser("export-flags")
@@ -65,8 +77,18 @@ def main():
         if args.command == "serve":
             from .agent import make_agent
             make_agent(root, args.port).run()
+        elif args.command == "serve-verifier":
+            from .agent import make_verifier_agent
+            make_verifier_agent(root, args.port).run()
         elif args.command == "resume":
-            result = asyncio.run(Bookkeeper(root).resume(args.trace_id))
+            result = asyncio.run(verified(root, trace_id=args.trace_id))
+            print(result.model_dump_json(indent=2))
+        elif args.command == "verify":
+            bookkeeper = Bookkeeper(root, model=os.getenv("ASI_MODEL", "asi1"))
+            drafted = bookkeeper.latest_draft(args.report_id)
+            if drafted is None:
+                raise ValueError(f"No saved draft for {args.report_id}")
+            result = asyncio.run(verify_in_process(bookkeeper, Verifier(root), drafted))
             print(result.model_dump_json(indent=2))
         elif args.command == "export-flags":
             export_flags(root, args.report, args.output)
@@ -76,7 +98,7 @@ def main():
                 from .agent import run_client
                 run_client(args.target, request, args.port, args.endpoint)
             else:
-                result = asyncio.run(Bookkeeper(root, model=os.getenv("ASI_MODEL", "asi1")).run(request))
+                result = asyncio.run(verified(root, request))
                 print(result.model_dump_json(indent=2))
     except Exception as exc:
         parser.exit(1, f"Bookkeeper failed ({type(exc).__name__}): {exc}\n")

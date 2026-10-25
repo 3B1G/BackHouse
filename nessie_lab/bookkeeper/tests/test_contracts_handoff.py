@@ -1,4 +1,4 @@
-"""Bookkeeper reports must pass the team's contracts hand-off (nessie_lab/contracts.py, used as is) without losing findings."""
+"""Verified Bookkeeper reports must pass the team's contracts hand-off (nessie_lab/contracts.py, used as is) without losing findings."""
 import importlib.util
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ import pytest
 
 from bookkeeper.contracts import ReportRequest
 from bookkeeper.runner import Bookkeeper
+from bookkeeper.verifier import Verifier, verify_in_process
 from conftest import ScriptedClient, bank_rows
 
 CONTRACTS = Path(__file__).resolve().parents[2] / "contracts.py"
@@ -47,8 +48,11 @@ EVERY_KIND = dict(
 
 async def test_every_treatment_kind_passes_the_hand_off(root, contracts):
     calls = ScriptedClient.CALLS + [("get_bank_transaction", {"bank_id": "n7"})]      # n7 is past the first page
-    result = await Bookkeeper(root, ScriptedClient(EVERY_KIND, calls)).run(ReportRequest(request_id="handoff"))
+    service = Bookkeeper(root, ScriptedClient(EVERY_KIND, calls))
+    result = await verify_in_process(service, Verifier(root, ScriptedClient(EVERY_KIND, calls)),
+                                     await service.run(ReportRequest(request_id="handoff")))
     report = json.loads((root / result.filename).read_text())
+    assert result.verified and report["verification"]["findings_checked"] == 4
     findings, adjustments, rejected = contracts.from_bk_report(report, id_map())
     assert rejected == {}
     assert sorted(f.issue_type for f in findings) == ["duplicate_charge", "fee_rate_change", "missed_payment", "overcharge"]
@@ -60,7 +64,9 @@ async def test_every_treatment_kind_passes_the_hand_off(root, contracts):
 
 
 async def test_scripted_report_converts_from_a_file_path(root, draft, contracts):
-    result = await Bookkeeper(root, ScriptedClient(draft)).run(ReportRequest(request_id="path"))
+    service = Bookkeeper(root, ScriptedClient(draft))
+    result = await verify_in_process(service, Verifier(root, ScriptedClient(draft)),
+                                     await service.run(ReportRequest(request_id="path")))
     findings, adjustments, rejected = contracts.from_bk_report(root / result.filename, id_map())
     assert rejected == {} and [f.bank_ids for f in findings] == [[id_map()["n2"]]]
     assert [a.kind for a in adjustments] == ["exclude_row"]

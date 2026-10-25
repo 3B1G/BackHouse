@@ -189,7 +189,7 @@ class ScriptedClient:
         self.calls += 1
         batch = batch_of(messages)
         self.seen_tools.append((batch, [t["function"]["name"] for t in tools]))
-        if tools and batch == self.investigator and len(messages) == 2:
+        if tools and batch == self.investigator and not any(m["role"] == "assistant" for m in messages):
             return {"role": "assistant", "content": None,
                     "tool_calls": [tool_call(i, name, args) for i, (name, args) in enumerate(self.script)]}
         return {"role": "assistant", "content": json.dumps(batch_result(self.draft if batch == self.investigator else None))}

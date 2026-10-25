@@ -169,6 +169,7 @@ uv run --project bookkeeper bookkeeper run --request-id first-report
 
 Set `ASI1_API_KEY` in the root `.env` or environment before generating a report.
 It uses two simulated read-only tools over the existing Nessie snapshot and books,
-then returns a saved report filename. Reports are **unverified** in V1; a separate
-verifier and Monte Carlo integration remain future work. See the subproject README
+then returns a saved report filename. Each report is drafted by the Bookkeeper and published by an
+independent Verifier agent, which keeps only the findings both investigations agree on;
+Monte Carlo integration remains future work. See the subproject README
 for the local uAgent client, ASI orchestrator integration, and tests.
