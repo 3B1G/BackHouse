@@ -1,7 +1,8 @@
-import { IconCheck, IconCopy } from "@tabler/icons-react";
+import { IconCheck, IconMessageCircle, IconX } from "@tabler/icons-react";
 import { useState } from "react";
-import type { Fix, Plan, PricePosition, StepEvent } from "../api";
+import { owner, remember, type Fix, type Plan, type PricePosition, type StepEvent } from "../api";
 import { mediumDate, money, moneyExact } from "../format";
+import { OwnerDialog } from "./OwnerDialog";
 
 const pct = (share: number) => `${Math.round(Math.abs(share) * 100)}%`;
 const price = (cents: number) => (cents % 100 ? moneyExact(cents) : money(cents));
@@ -15,23 +16,49 @@ function reason(fx: Fix, seen?: PricePosition) {
   return null;
 }
 
-/** One suggestion as a guest check: what it does to your cash, why, and the command that approves it. */
-function FixCard({ fx, n, seen }: { fx: Fix; n: number; seen?: PricePosition }) {
-  const [copied, setCopied] = useState(false);
+/** Opens the Chat with this suggestion already typed, for the owner to finish the question ("what if $20 instead?"). */
+function askChat(fx: Fix, days: number | null) {
+  // The suggestion's own numbers go along, so the Chat compares against them instead of guessing them.
+  const effect = [days ? `cash lasts about ${days} days longer on average` : null, fx.monthly_cents ? `about ${money(fx.monthly_cents)} more each month` : null]
+    .filter(Boolean)
+    .join(", ");
+  remember("boh-chat-draft", `About the suggestion "${fx.title}"${effect ? ` (${effect})` : ""}: `);
+  window.location.hash = "#/chat";
+}
+
+type Outcome = { kind: "approved"; line: string } | { kind: "declined" };
+
+/** One suggestion as a guest check: what it does to your cash, why, and the owner's three answers to it. */
+function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; seen?: PricePosition; ownerKey: boolean; onOwnerKey: () => void }) {
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const days = fx.days_later == null ? null : Math.round(fx.days_later);
   const why = reason(fx, seen);
   const moved = fx.runout_before && fx.runout_after && fx.runout_after !== fx.runout_before ? [fx.runout_before, fx.runout_after] : null;
 
-  const copy = async () => {
+  const approve = async (passphrase: string) => {
+    if (!ownerKey) {
+      await owner.setup(passphrase);
+      onOwnerKey(); // the key exists from here on, even if approving fails
+    }
+    const r = await owner.approve(fx.file, passphrase);
+    if (r.applied && !r.applied.applied) throw new Error(r.applied.error ?? "Changes signed it but couldn't apply it.");
+    setApproving(false);
+    setOutcome({ kind: "approved", line: r.line });
+  };
+
+  const decline = async () => {
+    setError(null);
     try {
-      await navigator.clipboard.writeText(fx.approve);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // No clipboard (an insecure page, or permission refused): the command stays on screen to select.
+      await owner.decline(fx);
+      setOutcome({ kind: "declined" });
+    } catch (err) {
+      setError((err as Error).message);
     }
   };
 
+  const button = "inline-flex min-h-11 items-center gap-1.5 rounded-md border-2 px-4 text-[0.9375rem] font-bold transition-colors duration-150";
   return (
     <li className="stub rounded-md border-2 border-rule bg-paper shadow-[0_14px_24px_-20px_rgba(31,77,54,0.5)]">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 px-5 pt-4">
@@ -55,23 +82,51 @@ function FixCard({ fx, n, seen }: { fx: Fix; n: number; seen?: PricePosition }) 
         {why && <p>{why}</p>}
         {fx.starts && <p className="text-pencil">Starts {mediumDate(fx.starts)} once you approve it.</p>}
       </div>
-      <div className="border-t-2 border-dashed border-rule bg-check/50 px-5 py-4">
-        <p className="text-sm font-bold text-ink">To approve it, run this at your terminal from nessie_lab/. It asks for the owner passphrase.</p>
-        <div className="mt-2 flex items-start gap-2">
-          <code className="min-w-0 flex-1 break-all rounded-md bg-ink px-3 py-2 font-mono text-[0.8125rem] leading-relaxed text-paper">{fx.approve}</code>
-          <button
-            type="button"
-            onClick={copy}
-            className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-md border-2 border-ink bg-paper px-3 text-sm font-bold text-ink transition-colors duration-150 hover:bg-check"
-          >
-            {copied ? <IconCheck aria-hidden="true" size={18} /> : <IconCopy aria-hidden="true" size={18} />}
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <span role="status" className="sr-only">
-            {copied ? "Copied the approve command" : ""}
-          </span>
-        </div>
+      <div className="border-t-2 border-dashed border-rule bg-check/50 px-5 py-4" aria-live="polite">
+        {outcome?.kind === "approved" ? (
+          <p className="flex items-start gap-2 text-[0.9375rem] font-bold text-ink">
+            <IconCheck aria-hidden="true" size={20} className="mt-0.5 shrink-0" />
+            Approved and done: {outcome.line}.
+          </p>
+        ) : outcome?.kind === "declined" ? (
+          <p className="flex items-start gap-2 text-[0.9375rem] font-bold text-carbon">
+            <IconX aria-hidden="true" size={20} className="mt-0.5 shrink-0" />
+            Declined. Nothing changed, and it won't be suggested again.
+          </p>
+        ) : (
+          <>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => setApproving(true)} className={`${button} border-ink bg-ink text-paper hover:bg-ink/90`}>
+                <IconCheck aria-hidden="true" size={18} />
+                Approve
+              </button>
+              <button type="button" onClick={decline} className={`${button} border-ink bg-paper text-ink hover:bg-check`}>
+                <IconX aria-hidden="true" size={18} />
+                Decline
+              </button>
+              <button type="button" onClick={() => askChat(fx, days)} className={`${button} border-transparent text-ink underline underline-offset-4 hover:bg-check`}>
+                <IconMessageCircle aria-hidden="true" size={18} />
+                Ask the Chat
+              </button>
+            </div>
+            <p className="mt-2 text-sm text-pencil">Approving asks for your owner passphrase, then the orchestrator has Changes update your menu.</p>
+            {error && (
+              <p role="alert" className="mt-2 text-sm font-bold text-serial">
+                {error}
+              </p>
+            )}
+          </>
+        )}
       </div>
+      <OwnerDialog
+        open={approving}
+        title="Approve this change"
+        what={`${fx.title}${fx.starts ? `, from ${mediumDate(fx.starts)}` : ""}`}
+        action="Approve and apply"
+        setup={!ownerKey}
+        onClose={() => setApproving(false)}
+        onSign={approve}
+      />
     </li>
   );
 }
@@ -137,13 +192,29 @@ function Prices({ market }: { market: NonNullable<Plan["market"]> }) {
 }
 
 /** "Changes to try": what the orchestrator suggests at the end of a check, each with what it does to your cash. */
-export function ChangesSection({ plan, market, step, started }: { plan: Plan | null; market?: StepEvent; step?: StepEvent; started: boolean }) {
+export function ChangesSection({
+  plan,
+  market,
+  step,
+  started,
+  ownerKey,
+  onOwnerKey,
+}: {
+  plan: Plan | null;
+  market?: StepEvent;
+  step?: StepEvent;
+  started: boolean;
+  ownerKey: boolean;
+  onOwnerKey: () => void;
+}) {
   const note = plan
     ? plan.fixes.length
       ? null
-      : plan.stage?.stage && plan.stage.stage !== "Suggest"
-        ? `The orchestrator suggests changes after you review the Bookkeeper's findings and commit that review at your terminal. Now: ${plan.stage.stage}. ${plan.stage.why ?? ""}`
-        : "Nothing the forecast supports right now. The orchestrator only suggests changes that keep your cash longer."
+      : plan.stage?.stage === "Audit"
+        ? `The orchestrator suggests changes once the Bookkeeper has checked your books. ${plan.stage.why ?? ""}`
+        : plan.stage?.stage && plan.stage.stage !== "Suggest"
+          ? "The orchestrator suggests changes after you review the Bookkeeper's findings below and sign your review."
+          : "Nothing the forecast supports right now. The orchestrator only suggests changes that keep your cash longer."
     : !started
       ? "After a check, the orchestrator suggests changes here, each with what it does to your cash. Nothing changes until you approve it."
       : step?.state === "waiting"
@@ -163,11 +234,12 @@ export function ChangesSection({ plan, market, step, started }: { plan: Plan | n
       {plan && plan.fixes.length > 0 && (
         <>
           <p className="mt-2 max-w-[62ch] text-[1.0625rem] text-carbon">
-            The orchestrator forecast each change against your cash and nearby menu prices. Every one passed a dry run and is saved for you to approve. Nothing changes until you do.
+            The orchestrator forecast each change against your cash and nearby menu prices, and every one passed a dry run. Approve the ones you want: nothing
+            changes until you do.
           </p>
           <ol className="mt-5 space-y-5">
             {plan.fixes.map((fx, i) => (
-              <FixCard key={fx.id} fx={fx} n={i + 1} seen={fx.dish ? seen.get(fx.dish) : undefined} />
+              <FixCard key={fx.id} fx={fx} n={i + 1} seen={fx.dish ? seen.get(fx.dish) : undefined} ownerKey={ownerKey} onOwnerKey={onOwnerKey} />
             ))}
           </ol>
         </>

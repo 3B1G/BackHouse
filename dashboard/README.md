@@ -17,6 +17,15 @@ check). It needs two more things once, from `nessie_lab/`:
 
 The second one fetches the competitors' own menu pages, so run it while online. `market-scout pages` lists what's saved.
 
+The orchestrator suggests changes only after the owner reviews the Bookkeeper's findings. With a verified report in
+`nessie_lab/data/reports/R-<id>.json`, merge it in once, from `nessie_lab/`:
+
+    uv run --project orchestrator orchestrator bookkeeper-ingest data/reports/R-<id>.json
+
+Then, on the dashboard, the owner accepts or dismisses each finding and signs the review, which opens the suggestions.
+Each suggestion has Approve, Decline and Ask the Chat. Signing and approving ask for the owner passphrase (the first
+time, the dialog sets it up); a decline writes nothing.
+
 From the repo root, start the server:
 
     uv run --project dashboard uvicorn main:app --app-dir dashboard/api --port 8000

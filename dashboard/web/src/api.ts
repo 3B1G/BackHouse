@@ -62,7 +62,7 @@ export type Finding = {
   confidence: number;
 };
 
-/** One change the orchestrator suggests: dry-run by Changes and saved for the owner to approve at their terminal. */
+/** One change the orchestrator suggests: dry-run by Changes and saved for the owner to approve, decline or ask about. */
 export type Fix = {
   id: string;
   action: string;
@@ -115,6 +115,49 @@ export type RunEvent =
 
 export type Account = { name: string; type: string };
 export type Upload = { upload_id: string; name: string; size: number; invoices: number };
+
+/** One of the Bookkeeper's findings in the owner's review, with the owner's decision so far. */
+export type ReviewFinding = {
+  finding_id: string;
+  verdict: string | null;
+  root_cause: string | null;
+  counterparty: string | null;
+  impact_cents: number;
+  verifier: string | null;
+  explanation: string | null;
+  suggested_action: string | null;
+  first: string | null;
+  last: string | null;
+  proposal: { decision: "accept" | "dismiss" | "revise"; note: string | null } | null;
+};
+
+/** The owner's review: where the orchestrator's stages stand, each open finding, and whether the owner key exists. */
+export type OwnerReview = {
+  stage: { stage: string; why: string; decided: number; open_findings: number; report: string | null } & Record<string, unknown>;
+  committed: boolean;
+  findings: ReviewFinding[];
+  batch?: { finding_ids: string[] };
+  owner_key: boolean;
+  fingerprint: string | null;
+  signed?: string;
+};
+
+export type Approved = { line: string; applied: { applied: boolean; error: string | null } | null };
+
+const post = <T>(url: string, body?: unknown) =>
+  fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) }).then((r) => read<T>(r));
+
+/** The owner's buttons. Committing and approving sign with the owner key, so they need the owner passphrase. */
+export const owner = {
+  review: () => fetch("/api/owner").then((r) => read<OwnerReview>(r)),
+  decide: (finding: string, decision: "accept" | "dismiss") => post<OwnerReview>("/api/owner/decide", { finding, decision }),
+  acceptVerified: () => post<OwnerReview>("/api/owner/accept-verified"),
+  setup: (passphrase: string) => post<OwnerReview>("/api/owner/setup", { passphrase }),
+  commit: (passphrase: string) => post<OwnerReview>("/api/owner/commit", { passphrase }),
+  approve: (file: string, passphrase: string) => post<Approved>("/api/owner/approve", { file, passphrase }),
+  decline: (fx: Fix) => post<{ ok: boolean }>("/api/owner/decline", { id: fx.id, action: fx.action, dish: fx.dish, new_price_cents: fx.new_price_cents, title: fx.title }),
+  plan: () => post<Plan>("/api/owner/plan"),
+};
 
 async function read<T>(res: Response): Promise<T> {
   if (!res.ok) {

@@ -12,6 +12,7 @@ import sqlite3
 import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
@@ -21,6 +22,7 @@ from pydantic import BaseModel
 import core
 from core import DATA, TAG, UPLOADS
 import forecast
+import orchestrator_bridge
 import pipeline
 import tracelog
 
@@ -115,6 +117,85 @@ def dev_trace(request: Request):
 @app.get("/api/scenarios")
 def get_scenarios():
     return {"scenarios": [{k: v for k, v in s.items() if k != "kw"} for s in forecast.scenarios()]}
+
+
+# The owner's buttons. Each body is JSON, so another site can't post one from the owner's browser (it would need a CORS
+# preflight this API never answers); a passphrase only ever goes on to the orchestrator's driver, on its stdin.
+class Decision(BaseModel):
+    finding: str
+    decision: Literal["accept", "dismiss"]
+
+
+class Passphrase(BaseModel):
+    passphrase: str
+
+
+class Approval(BaseModel):
+    file: str
+    passphrase: str
+
+
+class Decline(BaseModel):
+    id: str
+    action: str
+    dish: str | None = None
+    new_price_cents: int | None = None
+    title: str | None = None
+
+
+def _owner(mode, payload=None):
+    try:
+        return orchestrator_bridge.owner(mode, payload)
+    except orchestrator_bridge.OrchestratorError as e:
+        raise HTTPException(400, f"{str(e)[:1].upper()}{str(e)[1:300]}")
+
+
+@app.get("/api/owner")
+def owner_review():
+    """The owner's review of the Bookkeeper's findings: the stage, each finding and its decision, and the owner key."""
+    return _owner("owner")
+
+
+@app.post("/api/owner/decide")
+def owner_decide(d: Decision):
+    return _owner("decide", d.model_dump())
+
+
+@app.post("/api/owner/accept-verified")
+def owner_accept_verified():
+    return _owner("accept-verified")
+
+
+@app.post("/api/owner/setup")
+def owner_setup(p: Passphrase):
+    return _owner("setup", p.model_dump())
+
+
+@app.post("/api/owner/commit")
+def owner_commit(p: Passphrase):
+    """Signs the review with the owner key, then records the base forecast, which opens the suggestions."""
+    return _owner("commit", p.model_dump())
+
+
+@app.post("/api/owner/approve")
+def owner_approve(a: Approval):
+    """Signs one suggestion with the owner key and has Changes apply it to the cost/price database."""
+    return _owner("approve", a.model_dump())
+
+
+@app.post("/api/owner/decline")
+def owner_decline(d: Decline):
+    orchestrator_bridge.decline(d.model_dump())
+    return {"ok": True}
+
+
+@app.post("/api/owner/plan")
+def owner_plan():
+    """The orchestrator's brief again, after a review or an approval: the stage now, and the suggestions it opens."""
+    try:
+        return orchestrator_bridge.plan(orchestrator_bridge.run("brief", "owner"))
+    except orchestrator_bridge.OrchestratorError as e:
+        raise HTTPException(400, str(e)[:300])
 
 
 class ChatRequest(BaseModel):

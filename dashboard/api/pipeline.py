@@ -178,7 +178,7 @@ def _orchestrate(run):
         _check(run, "orchestrator", "pass", f"{fx['title']}: cash lasts {fx['days_later']:g} days longer on average")
     if fixes:
         _check(run, "orchestrator", "pass", "Changes dry-ran each one and saved it for your approval; nothing was applied")
-        _check(run, "orchestrator", "pending", "You approve each change at your terminal, with the owner passphrase")
+        _check(run, "orchestrator", "pending", "You approve or decline each change on the dashboard; approving needs your owner passphrase")
     else:
         _check(run, "orchestrator", "pass", "No change the forecast supports right now")
     run.emit(type="plan", plan=plan)
@@ -241,12 +241,12 @@ def _execute(run, upload):
             _check(run, "bookkeeper", "pass", f"{len(findings)} findings passed contracts.py")
             if rejected:
                 _check(run, "bookkeeper", "warn", f"{len(rejected)} findings rejected by contracts.py")
-            # Only fixes the verifier passed reach the Forecaster (contracts.passed_adjustments). checks.py, the verifier,
-            # isn't in the repo yet, so no finding counts as verified and nothing passes until it is.
+            # The owner decides which findings count: the review on the dashboard, signed with the owner key. The
+            # orchestrator's forecasts use what the owner accepted; this check's own forecast keeps the records as they are.
             passed = contracts.passed_adjustments(adjustments, [])
             _check(run, "bookkeeper", "pass" if passed else "pending",
                    f"{len(passed)} of {len(adjustments)} fixes passed the verifier and go to the Forecaster" if passed
-                   else f"The verifier isn't built yet, so none of its {len(adjustments)} fixes reach the forecast")
+                   else f"Its {len(adjustments)} fixes wait for your review of the findings on the dashboard")
             for f in findings:
                 run.emit(type="finding", finding=f.model_dump(mode="json"))
             _step(run, "bookkeeper", "done", f"Confirmed {len(findings)} problems", findings=len(findings),

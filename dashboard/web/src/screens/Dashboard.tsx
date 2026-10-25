@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState } from "react";
-import { api, followRun, recall, remember, type Finding, type Forecast, type Plan, type Scenario, type StepEvent, type StepId } from "../api";
+import {
+  api,
+  followRun,
+  owner,
+  recall,
+  remember,
+  type Finding,
+  type Forecast,
+  type OwnerReview,
+  type Plan,
+  type Scenario,
+  type StepEvent,
+  type StepId,
+} from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
 import { ChangesSection } from "../components/ChangesSection";
+import { FindingsReview } from "../components/FindingsReview";
 import { Hero } from "../components/Hero";
 import { TrendPanel } from "../components/TrendPanel";
 import { WhatIfSection } from "../components/WhatIfSection";
@@ -15,6 +29,8 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
   const [steps, setSteps] = useState<Partial<Record<StepId, StepEvent>>>({});
   const [findings, setFindings] = useState<Finding[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
+  const [review, setReview] = useState<OwnerReview | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [shown, setShown] = useState<Forecast | null>(null);
@@ -49,6 +65,24 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
       () => setFailed("Lost the connection to the check. Start it again to see fresh results."),
     );
   }, [runId]);
+
+  // The owner's review of the Bookkeeper's findings comes with each brief: it says what the owner can decide now.
+  useEffect(() => {
+    if (!plan) return;
+    owner
+      .review()
+      .then(setReview)
+      .catch(() => setReview(null));
+  }, [plan]);
+
+  // After the owner signs a review, the orchestrator's next brief opens the suggestions.
+  const refreshPlan = () => {
+    setPlanError(null);
+    owner
+      .plan()
+      .then(setPlan)
+      .catch((err) => setPlanError((err as Error).message));
+  };
 
   // The what-if menu comes with each scenario's own effect, so it loads once the forecast exists.
   const haveForecast = shown !== null;
@@ -129,13 +163,13 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
             </section>
           )}
 
-          <ChangesSection plan={plan} market={steps.market} step={steps.orchestrator} started={!!runId} />
-
           <section aria-labelledby="problems-heading" className="min-w-0">
             <h2 id="problems-heading" className="font-display text-3xl font-extrabold text-ink [font-stretch:80%]">
               Problems in your books
             </h2>
-            {findings.length === 0 && (
+            {review && review.findings.length > 0 ? (
+              <FindingsReview review={review} onReview={setReview} onSigned={refreshPlan} />
+            ) : (
               <div className="mt-4 rounded-lg border-2 border-dashed border-rule p-6">
                 <p className="max-w-[56ch] text-[1.0625rem] text-carbon">
                   {!runId
@@ -144,11 +178,27 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
                       ? "The Bookkeeper hasn't checked this data yet. Its findings will hang here, with the evidence."
                       : bookkeeper?.state === "working"
                         ? "The Bookkeeper is looking into what didn't match."
-                        : "Problems show up here as the Bookkeeper confirms them."}
+                        : findings.length
+                          ? "Loading the Bookkeeper's findings for your review…"
+                          : "Problems show up here as the Bookkeeper confirms them."}
                 </p>
               </div>
             )}
           </section>
+
+          <ChangesSection
+            plan={plan}
+            market={steps.market}
+            step={steps.orchestrator}
+            started={!!runId}
+            ownerKey={review?.owner_key ?? false}
+            onOwnerKey={() => setReview((r) => (r ? { ...r, owner_key: true } : r))}
+          />
+          {planError && (
+            <p role="alert" className="-mt-8 text-[0.9375rem] font-bold text-serial">
+              {planError}
+            </p>
+          )}
         </div>
 
         <aside

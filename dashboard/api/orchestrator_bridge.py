@@ -3,8 +3,10 @@
 The orchestrator has its own environment (uagents, the cost/price DB, Market scout and Changes), so it runs as a
 subprocess through uv with orchestrator_driver.py, and every call it makes streams to the developer page as it happens.
 Its brief needs no AI: cash, runway, bills, the Bookkeeper's findings, Market scout's price comparison, and the fixes
-the forecast supports, each dry-run by Changes and saved as a pending suggestion. The owner approves a suggestion at
-their own terminal, with the owner passphrase. Nothing here approves or applies anything.
+the forecast supports, each dry-run by Changes and saved as a pending suggestion. owner() runs the dashboard's owner
+buttons (orchestrator_driver.py says what each one does): committing a review or approving a suggestion needs the owner
+passphrase, which goes to the driver on stdin and never into the trace. A decline writes nothing to cost_price; it is
+kept in state/declined.json so the same change isn't suggested again.
 """
 import json
 import os
@@ -25,6 +27,10 @@ AGENT = {"get_cash_position": "Nessie", "list_bills_due": "Nessie", "lookup": "B
          "get_menu": "Records", "scan_market": "Market scout", "forecast_base": "Forecaster", "forecast_scenario": "Forecaster",
          "list_upcoming_changes": "Changes", "propose_fix": "Changes", "preview_suggestion": "Changes"}
 MAX_LOG_LINES = 20
+DECLINED = Path(__file__).with_name("state") / "declined.json"
+OWNER_SAYS = {"decide": "Owner decided a finding", "accept-verified": "Owner accepted the verified findings",
+              "setup": "Owner set up the owner passphrase", "commit": "Owner signed the review of the findings",
+              "approve": "Owner approved a change"}
 
 
 class OrchestratorError(Exception):
@@ -80,14 +86,55 @@ def run(mode, group, question=None, on_event=None, timeout=120):
     return final
 
 
+def owner(mode, payload=None):
+    """One owner button, in the orchestrator's environment. Returns the owner's review (or what an approval did)."""
+    if mode not in OWNER_SAYS and mode != "owner":
+        raise OrchestratorError(f"unknown owner action {mode!r}")
+    span = tracelog.Span("Changes" if mode in ("setup", "commit", "approve") else "Orchestrator",
+                         OWNER_SAYS.get(mode, "Owner opened the review"), "owner")
+    try:
+        out = run(mode, "owner", question=json.dumps(payload or {}))
+    except OrchestratorError as e:
+        span.fail(str(e)[:200])
+        raise
+    span.done((out.get("line") or out.get("signed") or "done")[:200])
+    return out
+
+
+def _key(fx):
+    return f"{fx.get('action')}|{fx.get('dish')}|{fx.get('new_price_cents')}"
+
+
+def declined():
+    try:
+        return {_key(d) for d in json.loads(DECLINED.read_text())}
+    except (OSError, ValueError):
+        return set()
+
+
+def decline(fx):
+    """The owner said no: nothing is written to cost_price, and the same change (dish, action, price) stays hidden."""
+    try:
+        rows = json.loads(DECLINED.read_text())
+    except (OSError, ValueError):
+        rows = []
+    rows.append({k: fx.get(k) for k in ("id", "action", "dish", "new_price_cents")})
+    DECLINED.parent.mkdir(exist_ok=True)
+    DECLINED.write_text(json.dumps(rows, indent=2))
+    tracelog.emit("Orchestrator", "result", f"Owner declined: {fx.get('title') or fx.get('id')}; nothing was changed", "owner")
+
+
 def plan(brief):
-    """The brief, trimmed to what the dashboard shows: cash, bills due soon, the price comparison and each fix."""
+    """The brief, trimmed to what the dashboard shows: cash, bills due soon, the price comparison and each fix the owner
+    hasn't declined."""
     facts = brief["facts"]
     cash, bills, market = facts.get("cash") or {}, facts.get("bills") or {}, facts.get("market") or {}
     dishes = {d["item"]: d for d in (brief.get("menu") or {}).get("dishes", [])}
-    fixes = []
+    fixes, no = [], declined()
     for fx in facts.get("fixes") or []:
         s, vs = fx["suggestion"], (fx["forecast"].get("vs_base") or {})
+        if _key({"action": s["action"], "dish": s.get("target"), "new_price_cents": s.get("new_price_cents")}) in no:
+            continue
         dish = dishes.get(s.get("target")) or {}
         fixes.append({
             "id": s["suggestion_id"], "action": s["action"], "title": s["title"], "dish": s.get("target"),

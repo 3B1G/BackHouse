@@ -1,12 +1,14 @@
 """Chat with your books: ASI:One (Fetch.ai) answers with the Bookkeeper's read-only tools and the Forecaster.
 
 Each question runs a short tool loop on the server (the ASI:One key never reaches the browser) and streams what it is
-doing, then the answer and the sources it used. Nothing here can change data: every tool only reads.
+doing, then the answer and the sources it used. Nothing here can change data: every tool only reads. try_menu_change asks
+the orchestrator to forecast a menu change; it changes nothing (approving one is the owner's button on the dashboard).
 """
 import json
 import re
 import sqlite3
-from datetime import date
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -14,6 +16,7 @@ from core import env_value, readiness
 import bookkeeper_tools as T
 import contracts as K
 import forecast
+import orchestrator_bridge
 import tracelog
 import uuid
 
@@ -35,6 +38,19 @@ WHAT_IF = {
     }},
 }
 
+MENU_CHANGE = {
+    "name": "try_menu_change",
+    "description": "Ask the orchestrator to rerun the Forecaster's 1,000 futures with menu changes starting tomorrow: new prices "
+                   "for dishes and/or dishes taken off the menu. Use it for questions like 'what if the Margherita Pizza were $20 "
+                   "instead of $21' or 'what if I raised a different dish instead'. Returns how many days later cash runs out on "
+                   "average versus doing nothing, the likely run-out date before and after, and the monthly cash effect in cents.",
+    "input_schema": {"type": "object", "additionalProperties": False, "required": [], "properties": {
+        "prices": {"type": "object", "additionalProperties": {"type": "number"},
+                   "description": "Dish name, exactly as on the menu, to its new price in dollars, e.g. {\"Margherita Pizza\": 20}"},
+        "remove": {"type": "array", "items": {"type": "string"}, "description": "Dishes to take off the menu"},
+    }},
+}
+
 LABELS = {
     "get_bank_transaction": "Opening a bank transaction",
     "search_bank_transactions": "Searching the bank",
@@ -48,6 +64,7 @@ LABELS = {
     "get_cash_deposit_slips": "Checking cash deposit slips",
     "get_delivery_payouts": "Checking delivery payouts",
     "run_what_if": "Running a what-if on 1,000 futures",
+    "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
 
@@ -58,7 +75,7 @@ class ChatError(Exception):
 
 def _functions():
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-            for t in [*T.TOOLS, WHAT_IF]]
+            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE]]
 
 
 def _paydays(f):
@@ -84,6 +101,28 @@ def _what_if(args, cid=None):
             "safe_through_payday": safe, "coin_flip_payday": flip, "doing_nothing_likely": f["base_likely"]}
 
 
+def _menu_change(args, cid=None):
+    """The orchestrator's forecast_scenario: the same 1,000 futures its suggestions were scored on."""
+    prices = {str(k): round(float(v) * 100) for k, v in (args.get("prices") or {}).items()}
+    remove = [str(d) for d in args.get("remove") or []]
+    if not prices and not remove:
+        return {"error": "Give new prices (prices) or dishes to take off the menu (remove)."}
+    start = (datetime.now(ZoneInfo("America/Los_Angeles")).date() + timedelta(days=1)).isoformat()   # CH's first day
+    words = [f"{d} at ${c / 100:,.2f}" for d, c in prices.items()] + [f"no {d}" for d in remove]
+    scenario = {"name": ", ".join(words)[:80], "changes_start": start,
+                **({"price_changes_cents": prices} if prices else {}), **({"remove_items": remove} if remove else {})}
+    try:
+        fc = orchestrator_bridge.run("scenario", cid, question=json.dumps(scenario))
+    except orchestrator_bridge.OrchestratorError as e:
+        return {"error": f"The orchestrator couldn't run that forecast: {str(e)[:200]}"}
+    if fc.get("error"):
+        return {"error": str(fc["error"])[:300]}
+    vs, before, after = fc.get("vs_base") or {}, fc.get("before") or {}, fc.get("after") or {}
+    return {"change": scenario["name"], "starts": start, "days_later_on_average": vs.get("days_moved_average"),
+            "likely_out_of_cash_before": before.get("run_out_likely"), "likely_out_of_cash_after": after.get("run_out_likely"),
+            "monthly_cash_effect_cents": fc.get("monthly_cash_effect_cents"), "cash_change_cents": vs.get("cash_change_cents")}
+
+
 def _size(out):
     """A one-line summary of a tool result for the developer page."""
     if "error" in out:
@@ -104,6 +143,11 @@ def _run_tool(name, raw_args, cid=None):
             out = _what_if(args, cid)
         except (ValueError, TypeError) as e:
             out = {"error": f"That what-if didn't work: {str(e).splitlines()[0][:160]}"}
+    elif name == "try_menu_change":
+        try:
+            out = _menu_change(args, cid)
+        except (ValueError, TypeError) as e:
+            out = {"error": f"That menu change didn't work: {str(e).splitlines()[0][:160]}"}
     else:
         out = T.call_tool(name, args)
     (span.fail if "error" in out else span.done)(_size(out))
@@ -117,7 +161,7 @@ def _label(name, args):
 
 
 def _source(name, args):
-    if name == "run_what_if":
+    if name in ("run_what_if", "try_menu_change"):
         return "Forecast"
     if name in BANK:
         return "Bank (Nessie)"
