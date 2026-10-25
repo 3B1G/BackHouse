@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { api, followRun, recall, remember, type Finding, type Forecast, type Plan, type Scenario, type StepEvent, type StepId } from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
 import { ChangesSection } from "../components/ChangesSection";
-import { GetStarted } from "../components/GetStarted";
 import { Hero } from "../components/Hero";
 import { TrendPanel } from "../components/TrendPanel";
 import { WhatIfSection } from "../components/WhatIfSection";
@@ -60,12 +59,6 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
       .then((r) => setScenarios(r.scenarios))
       .catch(() => setWhatIfError("The what-ifs didn't load. Reload the page to try again."));
   }, [haveForecast, scenarios]);
-
-  const begin = (id: string, restaurant: string) => {
-    remember("boh-run", id);
-    onRestaurant(restaurant);
-    setRunId(id);
-  };
 
   const reset = () => {
     remember("boh-run", null);
@@ -163,7 +156,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
             finished ? "" : "order-first lg:order-none"
           }`}
         >
-          {!runId ? <GetStarted onStarted={begin} /> : <AgentsPanel steps={steps} finished={finished} failed={failed} onRetry={reset} />}
+          {runId && <AgentsPanel steps={steps} finished={finished} failed={failed} onRetry={reset} />}
         </aside>
       </div>
     </>

@@ -30,7 +30,17 @@ function Problem({ children }: { children: React.ReactNode }) {
 const button =
   "inline-flex min-h-11 items-center justify-center rounded-md border-2 px-4 text-[0.9375rem] font-bold transition-colors duration-150 disabled:opacity-50";
 
-export function GetStarted({ onStarted }: { onStarted: (runId: string, restaurant: string) => void }) {
+/** The dashboard's first step, and the Chat's when a question arrives before any data is in (title and intro differ). */
+export function GetStarted({
+  onStarted,
+  title = "Get started",
+  intro,
+}: {
+  onStarted: (runId: string, restaurant: string) => void;
+  title?: string;
+  intro?: string;
+}) {
+  const headingId = useId();
   const fileId = useId();
   const helpId = useId();
   const [bank, setBank] = useState<{ state: "idle" | "connecting" | "error" | "connected"; accounts?: Account[]; message?: string }>({
@@ -77,10 +87,11 @@ export function GetStarted({ onStarted }: { onStarted: (runId: string, restauran
   };
 
   return (
-    <section aria-labelledby="start-heading" className="rounded-lg border-2 border-ink bg-paper p-5">
-      <h2 id="start-heading" className="font-display text-2xl font-extrabold text-ink [font-stretch:80%]">
-        Get started
+    <section aria-labelledby={headingId} className="rounded-lg border-2 border-ink bg-paper p-5">
+      <h2 id={headingId} className="font-display text-2xl font-extrabold text-ink [font-stretch:80%]">
+        {title}
       </h2>
+      {intro && <p className="mt-1 text-[0.9375rem] text-pencil">{intro}</p>}
       <ol className="mt-4 space-y-5">
         <li>
           <h3 className="text-[1.0625rem] font-bold">1. Connect the bank</h3>

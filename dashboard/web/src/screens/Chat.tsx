@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { askChat, recall, remember, type ChatTurn } from "../api";
+import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
 import { CheckMark } from "../components/Header";
 
-type Message = ChatTurn & { sources?: string[]; failed?: boolean; offTopic?: boolean };
+// needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model.
+type Message = ChatTurn & { sources?: string[]; failed?: boolean; offTopic?: boolean; needsData?: boolean; info?: boolean };
 
 const SUGGESTIONS = [
   "When do we run out of cash?",
@@ -48,7 +50,7 @@ function Tick() {
   );
 }
 
-export function Chat({ restaurant }: { restaurant: string | null }) {
+export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; onRestaurant?: (name: string) => void }) {
   const inputId = useId();
   const [messages, setMessages] = useState<Message[]>(load);
   const [draft, setDraft] = useState("");
@@ -57,8 +59,12 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
   const end = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const asked = useRef(false);
+  const latest = useRef(messages);
 
-  useEffect(() => remember("boh-chat", JSON.stringify(messages)), [messages]);
+  useEffect(() => {
+    latest.current = messages;
+    remember("boh-chat", JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     if (!messages.length && !busy) return;
@@ -71,7 +77,12 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
     if (!question || busy) return;
     const asked: Message = { role: "user", content: question };
     // Declined questions and their replies stay on screen but never go back to the model, so they can't steer later answers.
-    const kept = earlier.filter((m, i) => !m.failed && !m.offTopic && !(m.role === "user" && earlier[i + 1]?.offTopic));
+    // The same goes for "add your data first" replies and the app's own notes.
+    const kept = earlier.filter(
+      (m, i) =>
+        !m.failed && !m.offTopic && !m.needsData && !m.info &&
+        !(m.role === "user" && (earlier[i + 1]?.offTopic || earlier[i + 1]?.needsData)),
+    );
     const history: ChatTurn[] = [...kept, asked].map(({ role, content }) => ({ role, content }));
     setMessages([...earlier, asked]);
     setDraft("");
@@ -81,6 +92,7 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
     try {
       await askChat(history, (e) => {
         if (e.type === "tool") setSteps((s) => [...s, e.text]);
+        else if (e.type === "needs_data") setMessages((m) => [...m, { role: "assistant", content: e.text, needsData: true }]);
         else if (e.type === "answer")
           setMessages((m) => [
             ...m,
@@ -109,11 +121,28 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // The data is in (an upload or the sample books): ask the held question again, after a note saying what was loaded.
+  const dataReady = (name: string) => {
+    onRestaurant?.(name);
+    const ms = latest.current;
+    const at = ms.map((m) => m.role).lastIndexOf("user");
+    if (at < 0) return;
+    const note: Message = {
+      role: "assistant",
+      content: `Your data is in: ${name.split(",")[0]}'s bank and records. Answering your question now.`,
+      info: true,
+    };
+    void send(ms[at].content, [...ms.slice(0, at), note]);
+  };
+
   const retry = () => {
     const lastUser = messages.map((m) => m.role).lastIndexOf("user");
     if (lastUser < 0) return;
     void send(messages[lastUser].content, messages.slice(0, lastUser));
   };
+
+  // A session starts with Get started: until the bank and records are in, there is nothing to ask about.
+  const needSetup = !restaurant;
 
   const grow = (el: HTMLTextAreaElement) => {
     el.style.height = "auto";
@@ -144,7 +173,19 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
       </div>
 
       <div role="log" aria-live="polite" aria-relevant="additions" className="flex-1 space-y-7 py-7">
-        {messages.length === 0 && !busy && (
+        {needSetup && !busy && (
+          <section aria-labelledby="setup-heading">
+            <h2 id="setup-heading" className="font-display text-2xl font-extrabold text-ink [font-stretch:80%]">
+              Start by adding your data
+            </h2>
+            <p className="mt-1 max-w-[58ch] text-[0.9375rem] text-pencil">
+              BackHouse answers from your bank and your records, so it needs both first. Then you can ask anything about your
+              cash, bills and forecast.
+            </p>
+            <AddData title="Get started" onReady={(name) => onRestaurant?.(name)} />
+          </section>
+        )}
+        {!needSetup && messages.length === 0 && !busy && (
           <div>
             <h2 className="font-display text-2xl font-extrabold text-ink [font-stretch:80%]">Try asking</h2>
             <ul className="mt-3 border-t border-rule">
@@ -171,6 +212,11 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
                 {m.content}
               </p>
             </div>
+          ) : m.info ? (
+            <p key={i} className="flex gap-1.5 text-sm text-pencil">
+              <Tick />
+              {m.content}
+            </p>
           ) : (
             <article key={i} className="max-w-[68ch]">
               <p className="mb-1.5 flex items-center gap-2 text-sm font-bold text-ink">
@@ -191,6 +237,11 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
                       Try again
                     </button>
                   )}
+                </div>
+              ) : m.needsData ? (
+                <div>
+                  <p className="text-[1.0625rem] text-carbon">{m.content}</p>
+                  {i === messages.length - 1 && !busy && !needSetup && <AddData holding onReady={dataReady} />}
                 </div>
               ) : (
                 <Answer text={m.content} />
@@ -233,7 +284,7 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
             </div>
           </div>
         )}
-        <div ref={end} />
+        <div ref={end} className="scroll-mb-32" /* keeps the newest message above the sticky question box */ />
       </div>
 
       <form
@@ -262,12 +313,13 @@ export function Chat({ restaurant }: { restaurant: string | null }) {
                 void send(draft);
               }
             }}
-            placeholder="Type a question"
+            disabled={needSetup}
+            placeholder={needSetup ? "Add your data above to start asking" : "Type a question"}
             className="min-h-12 flex-1 resize-none rounded-md border-2 border-rule bg-paper px-3 py-2.5 text-[1.0625rem] text-carbon placeholder:text-pencil focus:border-ink focus:outline-none"
           />
           <button
             type="submit"
-            disabled={busy || !draft.trim()}
+            disabled={busy || needSetup || !draft.trim()}
             className="min-h-12 rounded-md border-2 border-ink bg-ink px-5 text-base font-bold text-white transition-colors duration-150 hover:bg-[#173b29] disabled:border-rule disabled:bg-check disabled:text-pencil"
           >
             Ask
