@@ -63,6 +63,13 @@ def main():
     serve.add_argument("--port", type=int, default=8001)
     serve_verifier = commands.add_parser("serve-verifier")
     serve_verifier.add_argument("--port", type=int, default=8003)
+    mailbox_status = commands.add_parser("mailbox-status", help="print each agent's address and whether it has an "
+                                                                "Agentverse mailbox")
+    mailbox_status.add_argument("prefixes", nargs="*", default=["BOOKKEEPER", "VERIFIER"],
+                                help="environment prefixes of the agents' seeds (<PREFIX>_SEED)")
+    mailbox_connect = commands.add_parser("mailbox-connect", help="create the Agentverse mailbox of the agent serving "
+                                                                  "on --port with its inspector on (AGENTVERSE_TOKEN)")
+    mailbox_connect.add_argument("--port", type=int, required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("--report-id", required=True, help="R-... of a saved draft under data/drafts")
     resume = commands.add_parser("resume")
@@ -80,6 +87,17 @@ def main():
         elif args.command == "serve-verifier":
             from .agent import make_verifier_agent
             make_verifier_agent(root, args.port).run()
+        elif args.command == "mailbox-status":
+            from .agent import mailboxes
+            for name, address, exists in mailboxes(args.prefixes):
+                print(name, address, "ok" if exists else "missing")
+        elif args.command == "mailbox-connect":
+            from .agent import connect_mailbox
+            token = os.getenv("AGENTVERSE_TOKEN", "").strip()
+            if not token:
+                raise ValueError("set AGENTVERSE_TOKEN (an Agentverse API key) in .env to create a mailbox")
+            connect_mailbox(args.port, token)
+            print("mailbox created")
         elif args.command == "resume":
             result = asyncio.run(verified(root, trace_id=args.trace_id))
             print(result.model_dump_json(indent=2))

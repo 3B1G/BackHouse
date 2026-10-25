@@ -19,8 +19,8 @@ the run may still publish, and `bookkeeper verify --report-id R-...` for a draft
 Inside the running uAgent (`orchestrator serve` with BOOKKEEPER_ADDR set) the request goes to the Bookkeeper agent
 instead (asetup / aupdate, by default; ORCHESTRATOR_USE_AGENTS=0 turns it off). Its reply is the same ReportResult,
 or {request_id, status: "error", error, error_type, trace_id}, which raises BookkeeperError. A Bookkeeper agent that
-fails fast falls back to the subprocess (marked degraded); one that times out does not (it may still be running, and
-a second run would double the ASI calls).
+never receives the request falls back to the subprocess (marked degraded); one that times out or replies with an
+error does not (it may still be running, or it ran, and a second run would double the ASI calls).
 
 These are the owner's operations (`orchestrator bookkeeper-setup` / `bookkeeper-update`): no LLM tool runs them.
 A turn may run a quick DELTA update first only with ORCHESTRATOR_BK_AUTO=1 and a delta-capable Bookkeeper
@@ -269,6 +269,11 @@ def _clean(text, cap=300) -> str:
 
 class AgentTimeout(BookkeeperError):
     """The Bookkeeper agent did not answer in time; it may still be running (so nothing falls back)."""
+
+
+class AgentUnreachable(BookkeeperError):
+    """The request never reached the Bookkeeper agent: the only failure that falls back to the subprocess. An agent
+    that ran and replied with an error is not rerun either, since a second run would double the ASI calls."""
 
 
 def adopt_reply(root, reply, request_id: str | None = None, sender: str = SENDER) -> tuple[Path, bool | None]:

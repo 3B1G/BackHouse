@@ -65,6 +65,7 @@ from uuid import uuid4
 import uvicorn
 from uagents import Agent, Context, Model, Protocol
 from uagents.asgi import ASGIServer
+from uagents.registration import AlmanacApiRegistrationPolicy
 from uagents.resolver import GlobalResolver, Resolver
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement, ChatMessage, EndSessionContent, MetadataContent, StartSessionContent, TextContent,
@@ -97,7 +98,7 @@ CORS_HEADERS = "Authorization, Content-Type"
 MAX_API_BODY = 64 * 1024
 TRUE, FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off", "")
 REQUEST_ID = re.compile(r"[^A-Za-z0-9._-]")
-NOTICE_PREFIX = "BackHouse notice:"
+NOTICE_PREFIX = "Hermes notice:"
 NOTICE_TAG = "backhouse_notice"
 
 
@@ -860,7 +861,7 @@ class Orchestrator:
                     if reply is None:
                         if why == "timed out":
                             raise asyncio.TimeoutError()
-                        raise R.BookkeeperError(f"the Bookkeeper agent {why}")
+                        raise R.AgentUnreachable(f"the Bookkeeper agent {why}")
                     return reply
                 try:
                     if op == "setup":
@@ -871,11 +872,13 @@ class Orchestrator:
                 except R.AgentTimeout as exc:              # it may still be running: no second run in-process
                     return {"status": "error", "error": str(exc), "degraded": True,
                             "notes": ["Bookkeeper agent timed out; not rerun in-process"]}
-                except (R.BookkeeperError, S.StateError) as exc:
-                    if "agent" not in str(exc):            # the report itself was bad: don't run again
-                        return {"status": "error", "error": str(exc), "degraded": True, "notes": []}
+                except R.AgentUnreachable as exc:          # it never ran: run it here instead
                     degraded = True
                     notes.append(f"degraded: {clean_text(str(exc), 200)}; ran the Bookkeeper in-process instead")
+                except (R.BookkeeperError, S.StateError) as exc:
+                    # it ran and failed, or its report was bad: running it again would double the ASI calls
+                    return {"status": "error", "error": str(exc), "degraded": True,
+                            "notes": ["Bookkeeper agent failed; not rerun in-process"]}
             fn = R.setup if op == "setup" else R.update
             kw = {"force": force} if op == "setup" else {}
             out = await asyncio.to_thread(lambda: fn(self.root, timeout=limit, tag=self.tag,
@@ -966,7 +969,7 @@ def build_protocol(service: Orchestrator, peers_to_ignore: set[str] | None = Non
         if not text:
             if reset:
                 service.session(sender, reset=True)
-            await ctx.send(sender, notice("Hi, I'm BackHouse's controller. Ask how we're doing, about cash, bills, "
+            await ctx.send(sender, notice("Hi, I'm Hermes's controller. Ask how we're doing, about cash, bills, "
                                           "the menu or the forecast."))
             return
         try:
@@ -1092,7 +1095,10 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
     if mailbox:
         allowed = None                                    # anyone on ASI:One; rate limited
         resolver = LocalFirstResolver(peers, GlobalResolver())
-        options = {"mailbox": True, "enable_agent_inspector": inspector, "publish_agent_details": True}
+        # the Almanac API alone (no on-chain registration, which wants FET), waiting 10 s: uagents 0.26.1 waits 1 s,
+        # and the API takes about 2 s to answer
+        options = {"mailbox": True, "enable_agent_inspector": inspector, "publish_agent_details": True,
+                   "registration_policy": AlmanacApiRegistrationPolicy(timeout=10)}
         if not owners:
             LOG.warning("ORCHESTRATOR_OWNERS is empty: no ASI:One user can make the orchestrator propose a change")
     else:
@@ -1104,7 +1110,7 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
         resolver = LocalFirstResolver(rules)
         options = {"endpoint": [f"http://127.0.0.1:{port}/submit"], "registration_policy": LocalRegistration(),
                    "enable_agent_inspector": False, "publish_agent_details": False}
-    agent = Agent(name="backhouse_orchestrator", seed=seed, port=port, resolve=resolver,
+    agent = Agent(name="hermes_orchestrator", seed=seed, port=port, resolve=resolver,
                   handle_messages_concurrently=True, report_events=False, **options)
     token = new_rest_token(root)
     guard_server(agent, token, inspector_open=inspector, allowed_origins=origins)

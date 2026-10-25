@@ -254,6 +254,23 @@ async def test_a_peer_not_on_the_allowlist_is_still_refused(root, monkeypatch):
     assert PEER not in allowed_senders(root)
 
 
+async def test_mailbox_mode_serves_health_and_the_inspector_only_when_asked(root, monkeypatch):
+    import uagents.asgi
+    from uagents.registration import AlmanacApiRegistrationPolicy
+    monkeypatch.setattr(uagents.asgi, "HOST", uagents.asgi.HOST)
+    monkeypatch.setenv("MARKET_SCOUT_ALLOWED_SENDERS", PEER)
+    monkeypatch.setenv("MARKET_SCOUT_SEED", "scout-test-seed-" + "x" * 32)
+    monkeypatch.setenv("MARKET_SCOUT_MAILBOX", "true")
+    monkeypatch.delenv("MARKET_SCOUT_PEERS", raising=False)
+    monkeypatch.delenv("MARKET_SCOUT_INSPECTOR", raising=False)
+    agent = make_agent(root)
+    assert agent._use_mailbox and [e.url for e in agent._endpoints] == [agent.agentverse.mailbox_endpoint]
+    assert {path for _, path in agent._rest_handlers} == {"/health"}            # keeps it running; no /connect
+    assert isinstance(agent._registration_policy, AlmanacApiRegistrationPolicy)
+    monkeypatch.setenv("MARKET_SCOUT_INSPECTOR", "true")                         # the one-time mailbox connect
+    assert "/connect" in {path for _, path in make_agent(root)._rest_handlers}
+
+
 @pytest.mark.parametrize("entry, error", [
     ("agent1abc", "expected agent1"),
     ("=http://127.0.0.1:8005/submit", "expected agent1"),
