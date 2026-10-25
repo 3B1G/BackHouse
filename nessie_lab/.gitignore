@@ -9,3 +9,16 @@ data/*.csv
 data/flags_*.json
 # stale Nessie samples (only boh-dev is current)
 data/nessie_manifest_sample*.json
+
+# market scout
+.venv/
+.pytest_cache/
+data/market_reports/
+data/market_pages/
+data/audit/
+# SQLite WAL sidecars (cost_price.db)
+*.db-wal
+*.db-shm
+# changes tool locks; the cost_price seal is local to each machine
+data/changes-locks/
+data/*.seal.json
