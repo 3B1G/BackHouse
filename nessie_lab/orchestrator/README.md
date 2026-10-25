@@ -11,7 +11,8 @@ which asks for the owner passphrase).
 ## How a turn works
 
 1. **Stage 1, "what is going on?"**: `get_cash_position`, `list_bills_due`, `lookup` (the Bookkeeper's read-only
-   tools), `get_findings`, `scan_market`, `get_menu`, `list_upcoming_changes`, `forecast_base`, `forecast_scenario`.
+   tools), `get_findings`, `scan_market`, `get_menu`, `list_upcoming_changes`, `forecast_base`, `forecast_scenario`,
+   `bookkeeper_status` (read-only).
 2. **Stage 2, "what do we do about it?"**: `propose_fix` writes a Suggestion and returns its `approve_command`;
    `preview_suggestion` re-runs CH's dry-run plan for it.
 
@@ -56,6 +57,69 @@ python -m uv run --project orchestrator pytest -q orchestrator/tests
 and prints it once; `orchestrator ask --server "..."` reads it from the file. `/ask` is registered only when the
 server is bound to a loopback address.
 
+## Bookkeeper: one-time setup, then quick updates
+
+The Bookkeeper (bk branch, `nessie_lab/bookkeeper`) reviews the whole bank window in one run: several minutes (up to
+~15) and ~20 ASI calls. The orchestrator runs that long review ONCE, then keeps a merged view of every report it has
+ingested in `data/orchestrator/bookkeeper_state.json`, so updates only need the newest days and the earlier findings
+stay in context. These are the owner's commands; no LLM tool can start a Bookkeeper run.
+
+```bash
+python -m uv run --project orchestrator orchestrator bookkeeper-setup     # once: the full backfill (--timeout 1800, --force to redo)
+python -m uv run --project orchestrator orchestrator bookkeeper-update    # later: only what is new (--timeout 600)
+python -m uv run --project orchestrator orchestrator bookkeeper-status    # baseline, covered through, days behind, counts, last run
+python -m uv run --project orchestrator orchestrator bookkeeper-ingest data/reports/R-<id>.json   # a report made by hand
+```
+
+- **How it runs the Bookkeeper.** As a subprocess, from `nessie_lab/`:
+  `uv run --project bookkeeper bookkeeper --root <root> run --request-id orch-bk-<as_of>-<8hex> --as-of <date>
+  --tag <tag>`. It reads the `filename` from the JSON the CLI prints. `as_of` is clamped to the latest bank date
+  (`MAX(date)` of `bank_tx`). You get a clear error when `nessie_lab/bookkeeper` is missing (merge the bk branch, or
+  use `bookkeeper-ingest`), when `ASI1_API_KEY` is missing, or on a timeout (the message names the
+  `R-<sha>.json` it may still write). A transport failure with a trace id is retried once with `bookkeeper resume`.
+  `ORCHESTRATOR_BK_UV` overrides the uv command.
+- **Merging.** Finding ids are renumbered on every run, so findings are matched by a key: the Bookkeeper's own
+  `finding_key` when it sends one, else `sha256(root_cause | counterparty | treatment.kind | target)`, and failing
+  that, the same root cause with overlapping bank ids. A FULL report replaces the open set: a finding it no longer
+  lists becomes `not_rereported` (kept, with a note, never used in the forecast). A DELTA report adds and updates
+  findings, and closes the ones it marks `resolved` or `superseded`. `covered_through` moves to the report's window
+  end. Re-ingesting a report is a no-op; a report with the same name and different content is refused; a delta that
+  leaves a gap, or a full report older than the state, is refused.
+- **What reads it.** `get_findings` and the forecasts use only the OPEN findings, through a synthetic schema-1.1
+  report (`bk_state.open_findings_report`, ids `key[:10]` so they can't collide) -> `from_bk_report` -> interim
+  checks -> `passed_adjustments`. `get_findings` adds `coverage` and a "days behind" note. With no state file,
+  everything works as before (the latest `data/reports/R-*.json`).
+- **Updates.** `bookkeeper-update` says "up to date" when `covered_through` is the latest bank date. Otherwise,
+  with `ORCHESTRATOR_BK_INCREMENTAL=1`, it asks for a delta since `covered_through + 1` with `prior_report_id`;
+  without it, it runs a full rerun at the latest date and diffs it against the state.
+- **Before a turn.** If the state is behind the bank, the turn's notes say
+  "Bookkeeper covers through X; run `orchestrator bookkeeper-update`". With `ORCHESTRATOR_BK_AUTO=1`,
+  `ORCHESTRATOR_BK_INCREMENTAL=1` and a Bookkeeper that has sent a delta report, a quick delta update runs first,
+  inside the turn's deadline (20 seconds are kept for the answer). A full rerun never runs automatically.
+- **Safety.** The state file is written atomically (temp file, then replace) under a lock file, and the previous
+  good copy is kept as `.bak`. A corrupt state file is recovered from `.bak` (the bad one is kept as
+  `.corrupt-<time>`), or refused with a message saying what to do. Only `R-*.json` files inside `data/reports` are
+  ingested (no `..`, no symlinks). `bookkeeper_status` only reads.
+- **One adapter.** `bk_adapter.py` is the only module that knows the Bookkeeper's report and request shapes.
+
+### What the Bookkeeper owner needs to add
+
+Today every run is a full snapshot (`as_of` = the latest bank date), ids are renumbered, and `ReportRequest`
+forbids extra fields. For quick updates the Bookkeeper should accept and report these fields. The names are
+suggestions; if they end up different, change only the constants at the top of `bk_adapter.py`:
+
+| Field | Where | Meaning |
+|---|---|---|
+| `since` | `ReportRequest` and CLI `--since`; echoed in `window.since` | review only bank rows on or after this date |
+| `prior_report_id` | `ReportRequest` and CLI `--prior-report-id` | the report this delta continues (for context) |
+| `mode` | `Report` | `"full"` or `"delta"` |
+| `coverage.window` | `Report.coverage` | `{start, end}`: the days this delta re-examined |
+| `finding_key` | each `Finding` | an id that stays the same across runs |
+| `status` | each `Finding` | `"open"`, `"resolved"` or `"superseded"` (a delta closes findings with it) |
+
+When that ships, set `ORCHESTRATOR_BK_INCREMENTAL=1` so the orchestrator sends `since` and `prior_report_id`.
+Optionally also set `ORCHESTRATOR_BK_AUTO=1` so chats catch up on their own.
+
 ## The uAgent (`agent.py`)
 
 Agent Chat Protocol on uagents 0.26.1, `handle_messages_concurrently=True`. Each message is acknowledged first.
@@ -99,7 +163,8 @@ the same Save/Discard path.
 - `scan_market` is sent to the market scout (`SCOUT_ADDR`) as a `MarketRequest` in a ChatMessage, with
   `ctx.send_and_receive(..., response_type=ChatMessage, timeout=25)`.
 - `get_findings` first asks the Bookkeeper (`BOOKKEEPER_ADDR`) for a report, `{request_id, nessie_tag, as_of}`,
-  which replies `{filename}`.
+  which replies `{filename}`. Once a Bookkeeper baseline exists (below), it reads the merged state instead and
+  never asks for a new run from a chat.
 - If either times out or errors, the in-process tool runs instead and the reply is marked degraded.
 - In local mode, both peers must be in `ORCHESTRATOR_PEERS` so their replies can be resolved. The scout must also
   list the orchestrator in `MARKET_SCOUT_ALLOWED_SENDERS` and `MARKET_SCOUT_PEERS`.
@@ -138,6 +203,9 @@ the same Save/Discard path.
 | `ORCHESTRATOR_CARDS` | `1`/`0`: Interactive Cards. On by default in mailbox mode. |
 | `ORCHESTRATOR_USE_AGENTS` | `1`: agent mode (scout and Bookkeeper over the Chat Protocol). |
 | `SCOUT_ADDR`, `BOOKKEEPER_ADDR` | Peer agent addresses for agent mode. |
+| `ORCHESTRATOR_BK_INCREMENTAL` | `1`: send `since` / `prior_report_id` to the Bookkeeper (only once it accepts them). |
+| `ORCHESTRATOR_BK_AUTO` | `1`: a turn may run a quick delta update first (needs INCREMENTAL and a delta-capable Bookkeeper). Never a full run. |
+| `ORCHESTRATOR_BK_UV` | The uv command used to run the Bookkeeper (default `uv` on PATH, else `python -m uv`). |
 | `AGENTVERSE_TOKEN` | For `orchestrator.register` only. Never printed. |
 | `ORCHESTRATOR_MAILBOX`, `ORCHESTRATOR_BIND_HOST`, `ORCHESTRATOR_OFFLINE`, `ORCHESTRATOR_TAG` | Mailbox mode, the bind address (default 127.0.0.1), offline market scans (default on) and the Nessie tag (default `boh-1loc`). |
 

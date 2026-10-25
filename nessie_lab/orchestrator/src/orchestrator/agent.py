@@ -488,6 +488,15 @@ def _core(name: str):
     return importlib.import_module(f"orchestrator.{name}")
 
 
+def _has_bk_state(session) -> bool:
+    """A Bookkeeper baseline exists (bk_state): chats read it instead of asking the Bookkeeper for a full run."""
+    try:
+        from .bk_state import state_path
+        return state_path(session.root).is_file()
+    except Exception:
+        return False
+
+
 class PeerDispatch:
     """dispatch() for run_tool_loop in agent mode. Remote results are appended to session.log (in the in-process
     tools' shape) so the guard, the controller and propose_fix see them; any failure falls back to the in-process
@@ -564,7 +573,10 @@ class PeerDispatch:
             self._fallback("market scout", why)
             result = await self._local(session, name, args)
             return {**result, "degraded": True} if isinstance(result, dict) else result
-        if name == "get_findings" and self.bookkeeper:
+        if name == "get_findings" and self.bookkeeper and _has_bk_state(session):
+            self.notes.append("bookkeeper: merged state used (the owner updates it with `orchestrator "
+                              "bookkeeper-update`); no new Bookkeeper run from a chat")
+        elif name == "get_findings" and self.bookkeeper:
             payload = {"request_id": self._request_id(session, "orch-bk"),
                        "nessie_tag": getattr(session, "tag", "boh-1loc"), "as_of": self._as_of(session)}
             reply, why = await self._call(self.bookkeeper, payload)

@@ -66,6 +66,8 @@ def brief(session: Session, max_fixes: int = 3, propose: bool = True) -> dict:
                      "owner to confirm (interim checks until the verifier exists):")
         for f in findings["findings"]:
             lines.append(f"  - {f['finding_id']}: {f['root_cause']} ({f['amount_at_issue_usd']} at issue)")
+        if findings.get("coverage_note"):
+            lines.append(f"  Coverage: {findings['coverage_note']}.")
         if findings.get("rejected"):
             lines.append(f"  Not used: {', '.join(sorted(findings['rejected']))}.")
 

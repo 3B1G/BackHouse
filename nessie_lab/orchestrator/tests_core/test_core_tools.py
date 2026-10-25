@@ -9,7 +9,8 @@ from orchestrator import tools
 from orchestrator.session import ID_RE, Session
 
 NAMES = ["get_cash_position", "list_bills_due", "lookup", "get_findings", "scan_market", "get_menu",
-         "list_upcoming_changes", "forecast_base", "forecast_scenario", "propose_fix", "preview_suggestion"]
+         "list_upcoming_changes", "forecast_base", "forecast_scenario", "propose_fix", "preview_suggestion",
+         "bookkeeper_status"]
 BK_REPORT = {"report_id": "R-1", "as_of": "2026-10-24", "schema_version": "1.1", "findings": [
     {"id": "B1", "root_cause": "card_fee_creep", "verdict": "error", "confidence": 0.9, "counterparty": "TableTap",
      "bank_ids": ["n-1"], "dates": {"first": "2026-08-01", "last": "2026-10-20"}, "books_refs": [],

@@ -9,6 +9,12 @@
                                                        bearer token from data/orchestrator/rest_token)
   orchestrator serve                                   orchestrator.agent (uAgent), when it exists
 
+The Bookkeeper (the owner's operations; no LLM tool runs them):
+  orchestrator bookkeeper-setup [--as-of D] [--timeout 1800] [--force]   the one-time full backfill
+  orchestrator bookkeeper-update [--timeout 600]       only the newest days (delta), or a full rerun diffed
+  orchestrator bookkeeper-ingest <data/reports/R-*.json>   merge a report the Bookkeeper owner made by hand
+  orchestrator bookkeeper-status                       baseline, covered through, days behind, finding counts
+
 Nothing here approves or applies: the owner runs the approve command each suggestion carries."""
 import argparse
 import asyncio
@@ -84,6 +90,75 @@ def _ask_server(root: Path, port: int, question: str, transport=None) -> int:
     return 0
 
 
+def _bookkeeper(session, args) -> int:
+    """bookkeeper-setup / -update / -ingest / -status. Errors are one clear line and exit 1."""
+    from . import bk_runner as R
+    from . import bk_state as S
+
+    root, tag = session.root, session.tag
+    try:
+        if args.command == "bookkeeper-status":
+            view = S.status_view(S.load(root, recover=False), R.latest_bank_date(root, tag))
+            if args.json:
+                _print(view)
+            else:
+                print(_status_text(view))
+            return 0
+        if args.command == "bookkeeper-ingest":
+            out = S.ingest(root, args.path)
+            print(_ingest_text(out))
+            return 0
+        if args.command == "bookkeeper-setup":
+            out = R.setup(root, as_of=args.bk_as_of, timeout=args.timeout, force=args.force, tag=tag, progress=print)
+            if out["status"] == "exists":
+                print(f"Bookkeeper baseline exists ({out['baseline']['filename']}, as of {out['baseline']['as_of']}; "
+                      f"covers through {out['covered_through']}). Nothing to do: use `orchestrator bookkeeper-update`, "
+                      "or --force to rerun the backfill.")
+                return 0
+            print(_ingest_text(out))
+            print(f"Backfill done in {out['seconds']} s.")
+            return 0
+        out = R.update(root, timeout=args.timeout, tag=tag, progress=print)
+        if out["status"] == "up_to_date":
+            print(f"Bookkeeper is up to date: covers through {out['covered_through']} (latest bank date "
+                  f"{out['latest_bank_date']}).")
+            return 0
+        print(_ingest_text(out))
+        print(f"Update done in {out['seconds']} s.")
+        return 0
+    except (R.BookkeeperError, S.StateError) as exc:
+        print(f"{args.command}: {exc}")
+        return 1
+
+
+def _ingest_text(out: dict) -> str:
+    if out.get("noop"):
+        return f"{out['report_id']}: already ingested; nothing changed (covers through {out['covered_through']})."
+    return (f"Ingested {out['report_id']} ({out['mode']}): {out['new']} new, {out['updated']} updated, "
+            f"{out['closed']} closed, {out['not_rereported']} not re-reported. Covers through "
+            f"{out['covered_through']}.")
+
+
+def _status_text(v: dict) -> str:
+    if not v.get("available"):
+        return f"Bookkeeper: {v['why']} (latest bank date {v.get('latest_bank_date')})."
+    b, c, last = v["baseline"] or {}, v["findings"], v["last_run"] or {}
+    lines = [f"Baseline:        {b.get('filename')} (as of {b.get('as_of')}, window "
+             f"{(b.get('window') or {}).get('start')} .. {(b.get('window') or {}).get('end')})",
+             f"Covered through: {v['covered_through']}  (latest bank date {v['latest_bank_date']}, "
+             f"{v['days_behind']} day(s) behind)",
+             f"Findings:        {c.get('open', 0)} open, {c.get('not_rereported', 0)} not re-reported, "
+             f"{c.get('resolved', 0)} resolved, {c.get('superseded', 0)} superseded",
+             f"Reports:         {v['reports_ingested']} ingested; last {last.get('filename')} ({last.get('mode')}, "
+             f"as of {last.get('as_of')}, ingested {last.get('ingested_at')})",
+             f"Incremental:     Bookkeeper delta mode {'seen' if v['delta_capable'] else 'not seen yet'}; "
+             f"ORCHESTRATOR_BK_INCREMENTAL={'1' if v['incremental_requests'] else 'off'}"]
+    lines += [f"Note:            {n}" for n in v.get("notes") or []]
+    if v["days_behind"]:
+        lines.append("Run `orchestrator bookkeeper-update` to catch up.")
+    return "\n".join(lines)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="orchestrator")
     p.add_argument("--root", type=Path, default=env.DEFAULT_ROOT, help="nessie_lab directory (its data/ is used)")
@@ -105,6 +180,17 @@ def main(argv=None):
     a.add_argument("--server", action="store_true", help="ask the running agent (POST /ask) instead of in-process")
     a.add_argument("--port", type=int, default=8005)
     sub.add_parser("serve")
+    bs = sub.add_parser("bookkeeper-setup", help="the one-time full Bookkeeper backfill (minutes, ~20 ASI calls)")
+    bs.add_argument("--as-of", dest="bk_as_of", type=date.fromisoformat, default=None,
+                    help="cutoff (default and maximum: the latest bank date)")
+    bs.add_argument("--timeout", type=float, default=1800)
+    bs.add_argument("--force", action="store_true", help="run again even though a baseline exists")
+    bu = sub.add_parser("bookkeeper-update", help="bring the Bookkeeper state up to the latest bank date")
+    bu.add_argument("--timeout", type=float, default=600)
+    bi = sub.add_parser("bookkeeper-ingest", help="merge one Bookkeeper report (data/reports/R-*.json)")
+    bi.add_argument("path")
+    st = sub.add_parser("bookkeeper-status")
+    st.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
     root = getattr(args, "root_after", None) or args.root
     online = args.online or getattr(args, "online_after", False)
@@ -140,6 +226,8 @@ def main(argv=None):
         if not files:
             print(f"no suggestions in {folder}")
         return 0
+    if args.command.startswith("bookkeeper-"):
+        return _bookkeeper(session, args)
     if args.command == "ask" and args.server:
         return _ask_server(session.root, args.port, args.question)
     if args.command == "ask":

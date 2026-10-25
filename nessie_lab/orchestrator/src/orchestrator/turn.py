@@ -17,7 +17,9 @@ turn(session, user_text, llm=None, ..., owner=True) -> {"text", "suggestions", "
   passes, the brief fallback only gets what is left, and the deadline is cancelled when the turn returns, so a
   tool thread left over from a timed-out turn writes nothing more.
 - No key, no client, or any loop error: the deterministic brief, degraded=True, with a note saying why.
-- Every reply ends with the fixed line FOOTER."""
+- Every reply ends with the fixed line FOOTER.
+- Before the turn, bk_runner.pre_turn adds a note when the Bookkeeper state is behind the bank (and, only with
+  ORCHESTRATOR_BK_AUTO=1 and a delta-capable Bookkeeper, runs a quick delta update within the deadline)."""
 import asyncio
 import importlib
 import inspect
@@ -223,9 +225,23 @@ async def turn(session, user_text: str, llm: ASIClient | None = None, dispatch=N
     except AttributeError:
         pass
     try:
-        return await _turn(session, user_text, llm, dispatch, stop, owner, brief_cache)
+        pre = [] if card_action(clean_text(user_text)) else await _bookkeeper_notes(session, stop, dispatch)
+        out = await _turn(session, user_text, llm, dispatch, stop, owner, brief_cache)
+        if pre and isinstance(out, dict):
+            out["notes"] = [*pre, *(out.get("notes") or [])]
+        return out
     finally:
         stop.cancel()                                     # leftover tool threads from this turn write nothing
+
+
+async def _bookkeeper_notes(session, stop, dispatch) -> list[str]:
+    """bk_runner.pre_turn: a note when the Bookkeeper state is behind the bank; with ORCHESTRATOR_BK_AUTO=1 and a
+    delta-capable Bookkeeper, a quick delta update inside this turn's deadline. Never a full rerun; never raises."""
+    try:
+        from .bk_runner import pre_turn
+        return await pre_turn(session, stop, dispatch)
+    except Exception:
+        return []
 
 
 async def _turn(session, user_text, llm, dispatch, stop: Deadline, owner: bool, brief_cache) -> dict:
