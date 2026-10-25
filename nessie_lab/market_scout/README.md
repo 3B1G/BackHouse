@@ -61,7 +61,7 @@ report back.
 Other replies: `"status": "error"` (bad request, unknown dish, sender not on the allowlist), `"rate_limited"` (more
 than 5 requests from one sender in 10 minutes) and `"busy"` (a scan is already running; it is not queued, ask again).
 
-## Calling the scout from the orchestrator (Ravneet)
+## Calling the scout from the orchestrator
 
 The scout listens on port **8003** (`http://127.0.0.1:8003/submit`) and speaks the Agent Chat Protocol: send one
 `ChatMessage` whose text is a `MarketRequest` as JSON; you get a `ChatAcknowledgement`, then one `ChatMessage` with
