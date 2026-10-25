@@ -35,6 +35,9 @@ python build_book.py      # adds the Book (costs, cost_lines) to books.db; rerun
 python features.py        # data/features.db
 python eda.py             # eda/report.md + charts
 python scenario_check.py  # does the data support the demo story?
+python forecaster.py      # Monte Carlo runway: base forecast -> data/forecasts/<id>.json + .png (--as-of, --report, --deterministic)
+python forecaster.py --scenario '{"name": "fridge + slow January", "one_off_costs": [{"cents": 480000, "day": "2026-11-15", "label": "fridge"}], "cover_change": {"2027-01": -0.15}}'
+python forecaster.py --backtest                    # forecast from TRAIN_END, scored on what happened -> data/forecasts/BT-<date>.json + .png
 python baseline_reconciler.py && python grade.py data/flags_baseline.json   # rule-based Bookkeeper baseline + score
 python nessie_load.py dry-run                      # validate every payload, no network
 python nessie_load.py full --tag <tag>             # ~1,326 calls, ~2 min at 8 workers

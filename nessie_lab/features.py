@@ -1,6 +1,8 @@
 """Feature tables for the agents -> data/features.db (v2).
 
-Uses ONLY books.db and bank_feed.csv (bank-visible columns, i.e. what Nessie will hold).
+Uses ONLY books.db and the bank as pulled back from Nessie (data/nessie_sync_<tag>.db via
+bookkeeper_tools.load_bank_frame(); run python nessie_sync.py --tag boh-1loc first). If that copy is missing it falls
+back to bank_feed.csv, prints a warning, and records the source in the `meta` table.
 Never reads data/grader/. Bank rows are categorized from description + payee, as a bookkeeper would.
 """
 import sqlite3
@@ -23,8 +25,19 @@ def load():
     for df in t.values():
         for c in [c for c in df.columns if c.endswith("date") or c in ("date", "due", "effective_from")]:
             df[c] = pd.to_datetime(df[c])
-    bank = pd.read_csv(D / "bank_feed.csv", parse_dates=["date"])
-    return t, bank
+    bank, source = load_bank()
+    bank["date"] = pd.to_datetime(bank.date)
+    return t, bank, source
+
+
+def load_bank():
+    """The bank as Nessie holds it; bank_feed.csv (the file uploaded to Nessie) only when the sync hasn't been run."""
+    import bookkeeper_tools as bt
+    try:
+        return bt.load_bank_frame(), f"nessie:{bt.BANK_DB.name}"
+    except (FileNotFoundError, RuntimeError) as e:
+        print(f"WARNING: {e}. Falling back to bank_feed.csv: this run does NOT use the Nessie copy.")
+        return pd.read_csv(D / "bank_feed.csv"), "bank_feed.csv"
 
 
 def categorize(bank, t):
@@ -187,7 +200,8 @@ def recurring(b, as_of=C.END):
 
 
 if __name__ == "__main__":
-    t, bank = load()
+    t, bank, source = load()
+    print(f"bank source: {source} ({len(bank)} rows)")
     b = categorize(bank, t)
     unc = b[b.category == "Uncategorized"]
     print(f"categorized {len(b) - len(unc)}/{len(b)} bank rows; uncategorized: {unc.memo.tolist()[:5]}")
@@ -196,7 +210,8 @@ if __name__ == "__main__":
               "feat_ingredient_month": ing, "feat_item_month": item_month(t, ing), "feat_supplier": supplier(t),
               "feat_recurring": recurring(b),
               # train-only versions for the backtest (no test-period information)
-              "feat_supplier_train": supplier(t, C.TRAIN_END), "feat_recurring_train": recurring(b, C.TRAIN_END)}
+              "feat_supplier_train": supplier(t, C.TRAIN_END), "feat_recurring_train": recurring(b, C.TRAIN_END),
+              "meta": pd.DataFrame([dict(key="bank_source", value=source)])}
     (D / "features.db").unlink(missing_ok=True)
     con = sqlite3.connect(D / "features.db")
     for n, df in tables.items():

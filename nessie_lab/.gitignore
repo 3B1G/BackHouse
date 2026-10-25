@@ -9,6 +9,11 @@ data/*.csv
 data/flags_*.json
 # stale Nessie samples (only boh-dev is current)
 data/nessie_manifest_sample*.json
+# forecaster outputs and Bookkeeper reports (generated)
+data/forecasts/
+data/reports/
+# local Python environment
+.venv/
 
 # market scout
 .venv/
