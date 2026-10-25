@@ -16,6 +16,7 @@ import time
 import uuid
 from contextlib import closing
 from datetime import date
+from pathlib import Path
 
 import core
 from core import DATA, LAB, TAG
@@ -27,6 +28,23 @@ RUNS = {}
 AGENTS = {"bank": "Nessie", "records": "Records", "matcher": "Matcher", "bookkeeper": "Bookkeeper", "forecast": "Forecaster",
           "market": "Market scout", "orchestrator": "Orchestrator"}
 MAX_LOG_LINES = 40              # per script call on the developer page; the rest is counted, not shown
+SAVED = Path(__file__).with_name("state") / "runs"
+KEEP = 20                       # finished checks kept on disk, newest first
+
+
+def saved(run_id):
+    """A finished check's events from disk, so the dashboard can replay it after the API restarts; None if there are none."""
+    if not re.fullmatch(r"[0-9a-f]{10}", run_id):
+        return None
+    try:
+        return json.loads((SAVED / f"{run_id}.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def replay(events):
+    for event in events:
+        yield f"data: {json.dumps(event, default=str)}\n\n"
 
 
 class Run:
@@ -45,6 +63,13 @@ class Run:
         with self.cond:
             self.done = True
             self.cond.notify_all()
+        try:                                     # memory goes with an API restart; the dashboard replays this instead
+            SAVED.mkdir(parents=True, exist_ok=True)
+            (SAVED / f"{self.id}.json").write_text(json.dumps(self.events, default=str))
+            for old in sorted(SAVED.glob("*.json"), key=lambda p: p.stat().st_mtime)[:-KEEP]:
+                old.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def stream(self):
         """Every event so far, then each new one as it happens; ends when the run does."""
@@ -191,7 +216,8 @@ def _execute(run, upload):
     check = tracelog.Span("Pipeline", f"Check started from {'your upload' if upload else 'the sample books'}", run.id)
     try:
         name, street = _one(DATA / "books.db", "select name, street_name from locations limit 1")
-        run.emit(type="run", restaurant=f"{name.rsplit(' ', 1)[0]}, {street.replace(' (SIMULATED)', '')}")
+        run.emit(type="run", restaurant=f"{name.rsplit(' ', 1)[0]}, {street.replace(' (SIMULATED)', '')}",
+                 started_at=round(run.t0))         # lets the dashboard tell a replay from a check happening now
         _step(run, "bank", "working", "Connecting to Nessie")
         out = _script(run, "bank", "nessie_sync.py", "--tag", TAG)
         if "round trip OK" not in out:

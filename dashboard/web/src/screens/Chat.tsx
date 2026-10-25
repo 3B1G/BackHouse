@@ -1,11 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { askChat, recall, remember, type ChatTurn } from "../api";
+import { IconArrowUpRight } from "@tabler/icons-react";
+import { askChat, recall, remember, type ChatLink, type ChatTurn } from "../api";
 import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
 import { CheckMark } from "../components/Header";
 
-// needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model.
-type Message = ChatTurn & { sources?: string[]; failed?: boolean; offTopic?: boolean; needsData?: boolean; info?: boolean };
+// needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model;
+// links: buttons to a change on the dashboard, where the owner approves, declines or sets the price.
+type Message = ChatTurn & { sources?: string[]; failed?: boolean; offTopic?: boolean; needsData?: boolean; info?: boolean; links?: ChatLink[] };
 
 const SUGGESTIONS = [
   "When do we run out of cash?",
@@ -111,7 +113,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
         else if (e.type === "answer")
           setMessages((m) => [
             ...m,
-            { role: "assistant", content: e.text || "I couldn't find an answer to that.", sources: e.sources, offTopic: e.off_topic },
+            { role: "assistant", content: e.text || "I couldn't find an answer to that.", sources: e.sources, offTopic: e.off_topic, links: e.links },
           ]);
         else setMessages((m) => [...m, { role: "assistant", content: e.text, failed: true }]);
       });
@@ -262,6 +264,23 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
                 <Answer text={m.content} />
               )}
               {!!m.sources?.length && <p className="mt-2 text-sm text-pencil">From {sourcesText(m.sources)}.</p>}
+              {!!m.links?.length && (
+                <ul className="mt-3 flex flex-wrap gap-2">
+                  {m.links
+                    .filter((l) => l.href.startsWith("#/?"))
+                    .map((l) => (
+                      <li key={l.href}>
+                        <a
+                          href={l.href}
+                          className="inline-flex min-h-11 items-center gap-1.5 rounded-md bg-ink px-4 text-[0.9375rem] font-bold text-paper no-underline transition-colors duration-150 hover:bg-ink/90 focus-visible:outline-offset-2"
+                        >
+                          {l.label}
+                          <IconArrowUpRight aria-hidden="true" size={18} />
+                        </a>
+                      </li>
+                    ))}
+                </ul>
+              )}
               {m.offTopic && i === messages.length - 1 && !busy && (
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {SUGGESTIONS.map((s) => (
