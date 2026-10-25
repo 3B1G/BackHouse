@@ -302,13 +302,43 @@ def _needs_data(missing):
                        "below, and I'll answer your question as soon as they're in.")
 
 
-def _reply(text, sources, links=()):
-    """The answer event, with any buttons open_change made. An answer with code in it is off topic by definition here,
-    so it is swapped for the refusal."""
+# The dashboard parts an answer can point to. Chosen by rules from the question's words and the tools used, never by the
+# model, so a button never points somewhere made up.
+SECTIONS = {
+    "paydays": {"label": "Paydays", "href": "#/?section=dash-paydays", "detail": "Each payday and the chance payroll clears"},
+    "cash": {"label": "Cash charts", "href": "#/?section=dash-cash", "detail": "Cash after each payroll, month by month, and spending"},
+    "changes": {"label": "Changes to try", "href": "#/?section=dash-changes", "detail": "Your prices against nearby menus, and suggested changes"},
+    "problems": {"label": "Problems in your books", "href": "#/?section=dash-problems", "detail": "What the Bookkeeper found, with the evidence"},
+}
+WORD_SECTION = [
+    ("problems", re.compile(r"duplicate|overcharg|mistake|\berrors?\b|wrong|problem|discrepanc|missing|\bfees?\b", re.I)),
+    ("changes", re.compile(r"\bprices?\b|menu|competitor|nearby|\braise|\bdish", re.I)),
+    ("paydays", re.compile(r"run out|runs out|runway|payroll|payday|coin flip|safe through|last until|how long", re.I)),
+    ("cash", re.compile(r"what[- ]?if|forecast|spend|spent|\bpaid\b|\bpay\b|bills?\b|invoice|supplier|unpaid|\brent\b|"
+                        r"cash flow|money in|repair|guests", re.I)),
+]
+TOOL_SECTION = {"run_what_if": "cash", "try_menu_change": "changes", "get_account_balances": "paydays",
+                "get_bank_bills": "cash", "search_costs": "cash", "get_cost": "cash", "get_payee_history": "cash",
+                "search_bank_transactions": "cash", "get_bank_transaction": "cash"}
+
+
+def _sections(question, tools, links):
+    """Up to two dashboard parts related to this answer: from the question's words first, then the tools it used (a
+    greeting or a question about the app matches neither). Not Changes when a change button is already there."""
+    parts = [part for part, words in WORD_SECTION if words.search(question or "")]
+    parts += [TOOL_SECTION[t] for t in tools if t in TOOL_SECTION]
+    parts = [p for p in dict.fromkeys(parts) if not (p == "changes" and links)]
+    return [{"id": p, **SECTIONS[p]} for p in parts[:2]]
+
+
+def _reply(text, sources, links=(), sections=()):
+    """The answer event, with any buttons open_change made and the related parts of the dashboard. An answer with code in
+    it is off topic by definition here, so it is swapped for the refusal."""
     text = (text or "").strip()
     if CODE.search(text):
         return _event(type="answer", text=OFF_TOPIC, sources=[], off_topic=True)
-    return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)), links=list(links)[:3])
+    return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)), links=list(links)[:3],
+                  sections=list(sections))
 
 
 def answer(history):
@@ -318,7 +348,7 @@ def answer(history):
     if not clean or clean[-1]["role"] != "user":
         yield _event(type="error", text="Ask a question about your books.")
         return
-    sources, links, cid = [], [], f"chat-{uuid.uuid4().hex[:6]}"
+    sources, links, used, cid = [], [], [], f"chat-{uuid.uuid4().hex[:6]}"
     ready = readiness()
     if not ready["ready"]:                           # no data yet: no model call, just ask for it
         tracelog.emit("Chat", "done", f"Waiting for data ({', '.join(ready['missing'])}): asked the owner to add it", cid)
@@ -337,7 +367,7 @@ def answer(history):
             calls = msg.get("tool_calls") or []
             if not calls:
                 tracelog.emit("Chat", "done", f"Answered from {len(set(sources))} sources", cid)
-                yield _reply(msg.get("content"), sources, links)
+                yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links))
                 return
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for c in calls:
@@ -348,10 +378,11 @@ def answer(history):
                     links.append(out["link"])
                 elif "error" not in out:
                     sources.append(_source(name, args))
+                    used.append(name)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})
         msg = _ask(messages + [{"role": "user", "content": "Answer now with what you have found."}], None, cid=cid)
         tracelog.emit("Chat", "done", f"Answered after {MAX_ROUNDS} rounds of lookups", cid)
-        yield _reply(msg.get("content"), sources, links)
+        yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links))
     except ChatError as e:
         tracelog.emit("Chat", "error", str(e), cid)
         yield _event(type="error", text=str(e))

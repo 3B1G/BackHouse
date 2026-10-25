@@ -21,7 +21,6 @@ from pydantic import BaseModel
 
 import core
 from core import DATA, TAG, UPLOADS
-import forecast
 import orchestrator_bridge
 import pipeline
 import tracelog
@@ -99,25 +98,11 @@ def run_events(run_id: str):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.get("/api/forecast")
-def get_forecast(w: str = ""):
-    """The forecast with the what-ifs in `w` (comma-separated ids from /api/scenarios) switched on."""
-    try:
-        return forecast.run([i for i in w.split(",") if i], group="dashboard")
-    except ValueError as e:
-        raise HTTPException(422, str(e))
-
-
 @app.get("/api/dev/trace")
 def dev_trace(request: Request):
     """Every agent call as it happens, for the developer page."""
     return StreamingResponse(tracelog.stream(request.headers.get("last-event-id")), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-@app.get("/api/scenarios")
-def get_scenarios():
-    return {"scenarios": [{k: v for k, v in s.items() if k != "kw"} for s in forecast.scenarios()]}
 
 
 # The owner's buttons. Each body is JSON, so another site can't post one from the owner's browser (it would need a CORS

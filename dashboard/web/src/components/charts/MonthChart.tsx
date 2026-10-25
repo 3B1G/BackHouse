@@ -11,24 +11,22 @@ type Bar = {
   v: number;
   lo: number;
   hi: number;
-  base: number | null;
   inCents: number;
   outCents: number;
   through: string | null;
 };
 
-function bars(f: Forecast, compare: boolean): Bar[] {
+function bars(f: Forecast): Bar[] {
   const last = f.window_end.slice(0, 7);
-  const base = new Map((f.base_months ?? []).map((m) => [m.month, m.p50]));
   return [
     ...f.history.months.map((m) => ({
-      month: m.month, past: true, v: m.net_cents, lo: m.net_cents, hi: m.net_cents, base: null,
+      month: m.month, past: true, v: m.net_cents, lo: m.net_cents, hi: m.net_cents,
       inCents: m.in_cents, outCents: m.out_cents, through: m.through ?? null,
     })),
     ...f.months
       .filter((m) => m.month <= last)
       .map((m) => ({
-        month: m.month, past: false, v: m.p50, lo: m.p10, hi: m.p90, base: compare ? (base.get(m.month) ?? null) : null,
+        month: m.month, past: false, v: m.p50, lo: m.p10, hi: m.p90,
         inCents: 0, outCents: 0, through: null,
       })),
   ];
@@ -39,8 +37,7 @@ const named = (b: Bar) => (b.through ? `${monthName(b.month)} 1 to ${+b.through.
 
 function readout(b: Bar) {
   if (b.past) return `${named(b)}: ${change(b.v)}. ${money(b.inCents)} came in, ${money(b.outCents)} went out.`;
-  const base = b.base === null ? "" : ` If nothing changes, ${change(b.base)}.`;
-  return `${monthYear(b.month)} forecast: likely ${change(b.v)}, ${change(b.lo)} to ${change(b.hi)} in 8 of 10 futures.${base}`;
+  return `${monthYear(b.month)} forecast: likely ${change(b.v)}, ${change(b.lo)} to ${change(b.hi)} in 8 of 10 futures.`;
 }
 
 /** A bar from the zero line to its value, rounded only at the value end. */
@@ -54,8 +51,8 @@ function barPath(cx: number, y0: number, y1: number, w: number) {
   return `M${l} ${y0}V${y1 + s * r}Q${l} ${y1} ${l + r} ${y1}H${rt - r}Q${rt} ${y1} ${rt} ${y1 + s * r}V${y0}Z`;
 }
 
-export function MonthChart({ f, compare, table }: { f: Forecast; compare: boolean; table: boolean }) {
-  const list = bars(f, compare);
+export function MonthChart({ f, table }: { f: Forecast; table: boolean }) {
+  const list = bars(f);
   return (
     <figure className="m-0">
       <ViewTitle title="How much cash grew or shrank each month">
@@ -79,7 +76,6 @@ export function MonthChart({ f, compare, table }: { f: Forecast; compare: boolea
             items={[
               { key: <SwatchKey color="var(--color-ballpoint)" />, label: "Cash grew" },
               { key: <SwatchKey color="var(--color-serial)" />, label: "Cash shrank" },
-              ...(compare ? [{ key: <LineKey color="var(--color-ghost)" />, label: "If nothing changes" }] : []),
             ]}
           />
           <Plot list={list} />
@@ -100,7 +96,7 @@ function Plot({ list }: { list: Bar[] }) {
   const right = Math.max(M.left + 1, width - M.right);
   const slot = (right - M.left) / list.length;
   const bw = Math.max(3, Math.min(24 * s, slot * 0.62));
-  const values = list.flatMap((b) => [b.v, b.base ?? b.v]);
+  const values = list.map((b) => b.v);
   const hi = Math.max(0, ...values);
   const lo = Math.min(0, ...values);
   const pad = (hi - lo) * 0.12;
@@ -172,21 +168,6 @@ function Plot({ list }: { list: Bar[] }) {
             />
           ))}
           <line x1={M.left} x2={right} y1={y(0)} y2={y(0)} stroke="var(--color-carbon)" strokeOpacity={0.7} />
-          {list.map(
-            (d, i) =>
-              d.base !== null && (
-                <line
-                  key={`base-${d.month}`}
-                  x1={cx(i) - bw / 2 - 3}
-                  x2={cx(i) + bw / 2 + 3}
-                  y1={y(d.base)}
-                  y2={y(d.base)}
-                  stroke="var(--color-ghost)"
-                  strokeWidth={2.5}
-                  strokeLinecap="round"
-                />
-              ),
-          )}
           {valueLabel(worst)}
           {list[best].v > 0 && valueLabel(best)}
           {list.map((d, i) => {
@@ -231,19 +212,9 @@ function Plot({ list }: { list: Bar[] }) {
               </p>
             </>
           ) : (
-            <>
-              <p className="mt-0.5 pl-[30px]">
-                {change(b.lo)} to {change(b.hi)} <span className="text-pencil">in 8 of 10 futures</span>
-              </p>
-              {b.base !== null && (
-                <p className="mt-0.5 flex items-center gap-2">
-                  <LineKey color="var(--color-ghost)" />
-                  <span>
-                    <strong>{change(b.base)}</strong> <span className="text-pencil">if nothing changes</span>
-                  </span>
-                </p>
-              )}
-            </>
+            <p className="mt-0.5 pl-[30px]">
+              {change(b.lo)} to {change(b.hi)} <span className="text-pencil">in 8 of 10 futures</span>
+            </p>
           )}
         </Tooltip>
       )}

@@ -7,9 +7,9 @@ import { Chat } from "./screens/Chat";
 import { Dashboard } from "./screens/Dashboard";
 import { Developer } from "./screens/Developer";
 
-export type Route = "dashboard" | "forecast" | "how" | "chat" | "developer";
+export type Route = "dashboard" | "how" | "chat" | "developer";
 
-const PATHS: Record<string, Route> = { "": "dashboard", forecast: "forecast", "how-it-works": "how", chat: "chat", developer: "developer" };
+const PATHS: Record<string, Route> = { "": "dashboard", "how-it-works": "how", chat: "chat", developer: "developer" };
 
 function useRoute(): Route {
   const [hash, setHash] = useState(() => window.location.hash);

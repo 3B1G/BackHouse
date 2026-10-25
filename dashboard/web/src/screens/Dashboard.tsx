@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  api,
   followRun,
   owner,
   recall,
@@ -9,7 +8,6 @@ import {
   type Forecast,
   type OwnerReview,
   type Plan,
-  type Scenario,
   type StepEvent,
   type StepId,
 } from "../api";
@@ -18,11 +16,9 @@ import { ChangesSection, type Focus } from "../components/ChangesSection";
 import { FindingsReview } from "../components/FindingsReview";
 import { Hero } from "../components/Hero";
 import { TrendPanel } from "../components/TrendPanel";
-import { WhatIfSection } from "../components/WhatIfSection";
-import { ForecastView } from "./ForecastView";
 import { HowItWorks } from "./HowItWorks";
 
-export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecast" | "how"; onRestaurant: (name: string | null) => void }) {
+export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; onRestaurant: (name: string | null) => void }) {
   const [runId, setRunId] = useState<string | null>(
     () => new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("run") ?? recall("boh-run"),
   );
@@ -40,11 +36,6 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
   const [finished, setFinished] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [shown, setShown] = useState<Forecast | null>(null);
-  const [scenarios, setScenarios] = useState<Scenario[] | null>(null);
-  const [selected, setSelected] = useState<string[]>([]);
-  const [whatIfError, setWhatIfError] = useState<string | null>(null);
-  const [pending, setPending] = useState(false);
-  const latest = useRef(0);
 
   useEffect(() => {
     if (!runId) return;
@@ -54,8 +45,6 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
     setFinished(false);
     setFailed(null);
     setShown(null);
-    setScenarios(null);
-    setSelected([]);
     let started: number | null = null;
     return followRun(
       runId,
@@ -102,15 +91,45 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
     if (focus) refreshPlan();
   }, [focus]);
 
-  // The what-if menu comes with each scenario's own effect, so it loads once the forecast exists.
-  const haveForecast = shown !== null;
+  // #/?section=dash-cash (the Chat's "See it on the dashboard" buttons): scroll to that part once it's on the page, and
+  // outline it for a moment.
   useEffect(() => {
-    if (!haveForecast || scenarios) return;
-    api
-      .scenarios()
-      .then((r) => setScenarios(r.scenarios))
-      .catch(() => setWhatIfError("The what-ifs didn't load. Reload the page to try again."));
-  }, [haveForecast, scenarios]);
+    let timer: number | undefined;
+    const go = () => {
+      window.clearInterval(timer);
+      const id = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("section");
+      if (!id?.startsWith("dash-")) return;
+      let tries = 0;
+      let last: number | null = null;
+      timer = window.setInterval(() => {
+        const el = document.getElementById(id);
+        // The charts and the review draw as the check replays and push the sections down: wait until it holds still.
+        const top = el ? Math.round(el.getBoundingClientRect().top + window.scrollY) : null;
+        const settled = top !== null && top === last;
+        last = top;
+        if (!settled && ++tries < 48) return;
+        window.clearInterval(timer);
+        window.history.replaceState(null, "", "#/");
+        if (!el) return;
+        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        const animate = !reduce && document.visibilityState === "visible"; // a background page doesn't run smooth scrolling
+        el.scrollIntoView({ behavior: animate ? "smooth" : "auto", block: "start" });
+        el.style.outline = "3px solid var(--color-serial)";
+        el.style.outlineOffset = "8px";
+        el.style.borderRadius = "12px";
+        window.setTimeout(() => {
+          el.style.outline = "";
+          el.style.outlineOffset = "";
+        }, 2200);
+      }, 125);
+    };
+    go();
+    window.addEventListener("hashchange", go);
+    return () => {
+      window.removeEventListener("hashchange", go);
+      window.clearInterval(timer);
+    };
+  }, []);
 
   const reset = () => {
     remember("boh-run", null);
@@ -118,70 +137,33 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
     setRunId(null);
   };
 
-  const apply = async (next: string[]) => {
-    const before = selected;
-    setSelected(next);
-    setPending(true);
-    setWhatIfError(null);
-    const ticket = ++latest.current;
-    try {
-      const f = await api.forecast(next);
-      if (ticket === latest.current) setShown(f);
-    } catch (err) {
-      if (ticket === latest.current) {
-        setSelected(before);
-        setWhatIfError(`${(err as Error).message}`);
-      }
-    } finally {
-      if (ticket === latest.current) setPending(false);
-    }
-  };
-
-  const toggle = (id: string) => apply(selected.includes(id) ? selected.filter((s) => s !== id) : [...selected, id]);
   const bookkeeper = steps.bookkeeper;
 
-  const whatIfs = !shown ? null : scenarios ? (
-    <WhatIfSection
-      scenarios={scenarios}
-      selected={selected}
-      f={shown}
-      pending={pending}
-      error={whatIfError}
-      onToggle={toggle}
-      onClear={() => apply([])}
-    />
-  ) : (
-    <p className={`text-[0.9375rem] ${whatIfError ? "font-bold text-serial" : "text-pencil"}`} role={whatIfError ? "alert" : undefined}>
-      {whatIfError ?? "Working out what each what-if does…"}
-    </p>
-  );
-
-  if (view === "forecast")
-    return <ForecastView f={shown} running={!!runId} compare={selected.length > 0} pending={pending} whatIfs={whatIfs} />;
   if (view === "how") return <HowItWorks steps={steps} running={!!runId} plan={plan} />;
 
   return (
     <>
-      {!runId ? <Hero mode="empty" /> : shown ? <Hero mode="ready" shown={shown} /> : <Hero mode="loading" />}
+      <div id="dash-paydays" className="scroll-mt-16">
+        {!runId ? <Hero mode="empty" /> : shown ? <Hero mode="ready" shown={shown} /> : <Hero mode="loading" />}
+      </div>
 
       <div className="mx-auto grid max-w-6xl 2xl:max-w-7xl gap-x-10 gap-y-12 px-4 py-10 sm:px-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <div className="min-w-0 space-y-12">
-          {shown ? (
-            <>
-              <TrendPanel f={shown} compare={selected.length > 0} pending={pending} />
-              {whatIfs}
-            </>
-          ) : (
-            <section aria-label="Charts" className="rounded-lg border-2 border-dashed border-rule p-6">
-              <p className="max-w-[56ch] text-[1.0625rem] text-carbon">
-                {runId
-                  ? "Your charts draw as soon as the Forecaster finishes."
-                  : "Charts of your cash appear here: the past year from your bank and the next 15 months from the Forecaster, with what-ifs you can try."}
-              </p>
-            </section>
-          )}
+          <div id="dash-cash" className="scroll-mt-28">
+            {shown ? (
+              <TrendPanel f={shown} />
+            ) : (
+              <section aria-label="Charts" className="rounded-lg border-2 border-dashed border-rule p-6">
+                <p className="max-w-[56ch] text-[1.0625rem] text-carbon">
+                  {runId
+                    ? "Your charts draw as soon as the Forecaster finishes."
+                    : "Charts of your cash appear here: the past year from your bank and the next 15 months from the Forecaster. Ask the Chat a what-if to see how a change would move them."}
+                </p>
+              </section>
+            )}
+          </div>
 
-          <section aria-labelledby="problems-heading" className="min-w-0">
+          <section id="dash-problems" aria-labelledby="problems-heading" className="min-w-0 scroll-mt-28">
             <h2 id="problems-heading" className="font-display text-3xl font-extrabold text-ink [font-stretch:80%]">
               Problems in your books
             </h2>
@@ -204,15 +186,17 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
             )}
           </section>
 
-          <ChangesSection
-            plan={plan}
-            market={steps.market}
-            step={steps.orchestrator}
-            started={!!runId}
-            ownerKey={review?.owner_key ?? false}
-            onOwnerKey={() => setReview((r) => (r ? { ...r, owner_key: true } : r))}
-            focus={focus}
-          />
+          <div id="dash-changes" className="scroll-mt-28">
+            <ChangesSection
+              plan={plan}
+              market={steps.market}
+              step={steps.orchestrator}
+              started={!!runId}
+              ownerKey={review?.owner_key ?? false}
+              onOwnerKey={() => setReview((r) => (r ? { ...r, owner_key: true } : r))}
+              focus={focus}
+            />
+          </div>
           {planError && (
             <p role="alert" className="-mt-8 text-[0.9375rem] font-bold text-serial">
               {planError}

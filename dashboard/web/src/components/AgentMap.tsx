@@ -134,7 +134,7 @@ function route(e: TraceEvent): [string, string] | null {
   if (e.agent === "Scope check" || e.agent === "Tools") return ["chat", e.agent];
   if (!BY_ID[e.agent]) return null;
   const g = e.group ?? "";
-  // The Chat reaches the Forecaster through its what-if tool; the dashboard's what-ifs call it directly (no line drawn).
+  // The Chat reaches the Forecaster through its what-if tool; a check's forecast comes from the orchestrator or the pipeline.
   return [g.startsWith("chat-") ? "Tools" : /^[0-9a-f]{10}$/.test(g) ? "orchestrator" : "you", e.agent];
 }
 

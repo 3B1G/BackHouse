@@ -31,16 +31,6 @@ export type Forecast = {
   runtime_ms: number;
 };
 
-/** One what-if the owner can switch on, with how far it moves the day cash runs out on its own. */
-export type Scenario = {
-  id: string;
-  group: "risk" | "change";
-  title: string;
-  detail: string;
-  available: boolean;
-  effect_days: number | null;
-};
-
 export type StepId = "bank" | "records" | "matcher" | "bookkeeper" | "forecast" | "market" | "orchestrator";
 export type StepState = "working" | "done" | "waiting";
 export type StepEvent = { type: "step"; step: StepId; state: StepState; text: string; t: number; forecast?: Forecast };
@@ -186,9 +176,6 @@ export const api = {
     fetch("/api/runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then((r) =>
       read<{ run_id: string }>(r),
     ),
-  forecast: (whatIfs: string[]) =>
-    fetch(`/api/forecast?w=${encodeURIComponent(whatIfs.join(","))}`).then((r) => read<Forecast>(r)),
-  scenarios: () => fetch("/api/scenarios").then((r) => read<{ scenarios: Scenario[] }>(r)),
   /** Whether the bank and records are in yet; a check puts them there. */
   readiness: () => fetch("/api/readiness").then((r) => read<{ ready: boolean; missing: ("bank" | "records")[] }>(r)),
 };
@@ -196,9 +183,11 @@ export const api = {
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 /** A button under a Chat answer, to a change on the dashboard (the Chat can't approve anything itself). */
 export type ChatLink = { label: string; href: string };
+/** A part of the dashboard an answer relates to, picked by rules on the server (never by the model). */
+export type ChatSection = { id: string; label: string; href: string; detail: string };
 export type ChatEvent =
   | { type: "tool"; text: string }
-  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean; links?: ChatLink[] }
+  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean; links?: ChatLink[]; sections?: ChatSection[] }
   /** Asked before any data is in: the chat holds the question and offers an upload or the sample books. */
   | { type: "needs_data"; text: string; missing: ("bank" | "records")[] }
   | { type: "error"; text: string };
