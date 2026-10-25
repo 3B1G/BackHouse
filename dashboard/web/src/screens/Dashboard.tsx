@@ -13,7 +13,6 @@ import {
   type StepId,
 } from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
-import { BookkeeperRun } from "../components/BookkeeperRun";
 import { ChangesSection, type Focus } from "../components/ChangesSection";
 import { FindingsReview } from "../components/FindingsReview";
 import { Hero } from "../components/Hero";
@@ -200,7 +199,15 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; o
                 </p>
               </div>
             )}
-            <BookkeeperRun onFinished={refreshPlan} />
+            {runId && (
+              <p className="mt-4 text-[0.9375rem] text-pencil">
+                New bank transactions since?{" "}
+                <a href={`#/chat?ask=${encodeURIComponent("Run the Bookkeeper")}`} className="font-bold text-ink underline underline-offset-4">
+                  Ask the Chat to run the Bookkeeper
+                </a>
+                .
+              </p>
+            )}
           </section>
 
           <div id="dash-changes" className="scroll-mt-28">

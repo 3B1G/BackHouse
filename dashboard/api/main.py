@@ -212,7 +212,6 @@ def demo_reset(r: DemoReset):
 
 class BookkeeperRun(BaseModel):
     confirm: Literal["run the bookkeeper"]           # said in the body, so nothing starts by accident
-    full: bool = False                               # rerun everything from scratch, even when nothing is new
 
 
 @app.get("/api/bookkeeper")
@@ -223,10 +222,10 @@ def bookkeeper_status():
 
 @app.post("/api/bookkeeper/run")
 def bookkeeper_start(r: BookkeeperRun):
-    """The owner's "Run the Bookkeeper" (bookkeeper_run.py): the orchestrator's update, or with no report yet its first
-    run, in the background. It spends ASI:One only when the bank has days the Bookkeeper hasn't checked."""
+    """The owner's "Run the Bookkeeper" from the Chat's card (bookkeeper_run.py): the orchestrator's update, in the
+    background. It spends ASI:One only when the bank has days the Bookkeeper hasn't checked; nothing bigger starts here."""
     try:
-        return {"run": bookkeeper_run.start(full=r.full)}
+        return {"run": bookkeeper_run.start()}
     except RuntimeError as e:
         raise HTTPException(409, str(e))
 

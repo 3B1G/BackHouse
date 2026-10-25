@@ -1,13 +1,14 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { IconArrowUpRight } from "@tabler/icons-react";
-import { askChat, recall, remember, type ChatLink, type ChatSection, type ChatTurn } from "../api";
+import { askChat, recall, remember, type ChatAction, type ChatLink, type ChatSection, type ChatTurn } from "../api";
 import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
+import { BookkeeperRun } from "../components/BookkeeperRun";
 import { Logo } from "../components/Header";
 
 // needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model;
 // links: buttons to a change on the dashboard, where the owner approves, declines or sets the price; sections: the parts
-// of the dashboard the answer relates to.
+// of the dashboard the answer relates to; actions: cards under the answer ("bookkeeper": where the owner runs it).
 type Message = ChatTurn & {
   sources?: string[];
   failed?: boolean;
@@ -16,6 +17,7 @@ type Message = ChatTurn & {
   info?: boolean;
   links?: ChatLink[];
   sections?: ChatSection[];
+  actions?: ChatAction[];
 };
 
 const SUGGESTIONS = [
@@ -129,6 +131,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
               offTopic: e.off_topic,
               links: e.links,
               sections: e.sections,
+              actions: e.actions,
             },
           ]);
         else setMessages((m) => [...m, { role: "assistant", content: e.text, failed: true }]);
@@ -176,6 +179,8 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
 
   // A session starts with Get started: until the bank and records are in, there is nothing to ask about.
   const needSetup = !restaurant;
+  // The Bookkeeper's card goes under the newest answer that offered it: one card, one run at a time.
+  const bookkeeperAt = messages.map((m) => !!m.actions?.includes("bookkeeper")).lastIndexOf(true);
 
   const grow = (el: HTMLTextAreaElement) => {
     el.style.height = "auto";
@@ -280,6 +285,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
                 <Answer text={m.content} />
               )}
               {!!m.sources?.length && <p className="mt-2 text-sm text-pencil">From {sourcesText(m.sources)}.</p>}
+              {i === bookkeeperAt && <BookkeeperRun />}
               {!!m.links?.length && (
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {m.links

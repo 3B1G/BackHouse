@@ -66,13 +66,13 @@ DISH = re.compile(r"^[A-Za-z0-9 &'(),.-]{1,80}$")
 
 OPEN_BOOKKEEPER = {
     "name": "open_bookkeeper",
-    "description": "Give the owner a button to the Bookkeeper on the dashboard, where they can run it again: it checks for bank "
-                   "days it hasn't looked at and, if there are any, re-checks the books and writes a new report. Call it "
-                   "whenever the owner asks for a new Bookkeeper report, to run or rerun the Bookkeeper, or to check the "
-                   "books again: you can't start it yourself.",
+    "description": "Put the Bookkeeper's card under your answer, where the owner runs it: it checks for bank days it hasn't "
+                   "looked at and, only if there are any, re-checks the books and writes a new report. Call it whenever the "
+                   "owner asks for a new Bookkeeper report, to run or rerun the Bookkeeper, or to check the books again: you "
+                   "can't start it yourself.",
     "input_schema": {"type": "object", "additionalProperties": False, "required": [], "properties": {}},
 }
-LINK_TOOLS = ("open_change", "open_bookkeeper")  # they make a button; they look nothing up
+LINK_TOOLS = ("open_change", "open_bookkeeper")  # they put a button or a card under the answer; they look nothing up
 
 MENU = {
     "name": "get_menu",
@@ -97,7 +97,7 @@ LABELS = {
     "run_what_if": "Running a what-if on 1,000 futures",
     "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
     "open_change": "Finding that change on your dashboard",
-    "open_bookkeeper": "Finding the Bookkeeper on your dashboard",
+    "open_bookkeeper": "Getting the Bookkeeper ready",
     "get_menu": "Reading your menu",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
@@ -231,10 +231,10 @@ def _open_change(args):
 
 
 def _open_bookkeeper():
-    """A button to the Bookkeeper's run on the dashboard (bookkeeper_run.py). It starts nothing."""
-    return {"link": {"label": "Run the Bookkeeper on the dashboard", "href": "#/?section=dash-bookkeeper"},
-            "note": "Nothing has started. Tell the owner you can't run the Bookkeeper yourself, and that the button under "
-                    "your answer takes them to it on the dashboard, where they start it."}
+    """The Bookkeeper's card under the answer (bookkeeper_run.py), where the owner starts it. It starts nothing."""
+    return {"action": "bookkeeper",
+            "note": "Nothing has started. Tell the owner you can't run the Bookkeeper yourself, and that the card under your "
+                    "answer does: it checks for bank days the Bookkeeper hasn't seen, and runs it only if there are any."}
 
 
 def _size(out):
@@ -321,7 +321,7 @@ How to answer:
   with the dish (and their price, if they named one): they get a button to that change on the dashboard, where they set
   the price and approve or decline it. Never describe dashboard screens or steps from memory.
 - When the owner asks for a new Bookkeeper report, or to run the Bookkeeper or check the books again, say in one sentence
-  that you can't start it yourself, and call open_bookkeeper: they get a button to it on the dashboard.
+  that you can't start it yourself, and call open_bookkeeper: its card under your answer is where they run it.
 - When a tool result says a button is already under your answer, point to it in a few words; never offer to make one.
 - Lead with the answer. Keep it to 2 to 5 short sentences, and use a short bullet list only for several items.
 - Name where a number came from (the bank, your records, the forecast) when it matters.
@@ -431,14 +431,15 @@ def _sections(question, tools, links):
     return [{"id": p, **SECTIONS[p]} for p in parts[:2]]
 
 
-def _reply(text, sources, links=(), sections=()):
-    """The answer event, with any buttons open_change or a what-if made, and the related parts of the dashboard. An
-    answer with code in it is off topic by definition here, so it is swapped for the refusal."""
+def _reply(text, sources, links=(), sections=(), actions=()):
+    """The answer event, with any buttons open_change or a what-if made, the cards to show under it (actions:
+    "bookkeeper"), and the related parts of the dashboard. An answer with code in it is off topic by definition here, so
+    it is swapped for the refusal."""
     text = (text or "").strip()
     if CODE.search(text):
         return _event(type="answer", text=OFF_TOPIC, sources=[], off_topic=True)
     return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)), links=list(links)[:3],
-                  sections=list(sections))
+                  sections=list(sections), actions=list(actions))
 
 
 def answer(history):
@@ -448,7 +449,7 @@ def answer(history):
     if not clean or clean[-1]["role"] != "user":
         yield _event(type="error", text="Ask a question about your books.")
         return
-    sources, links, used, cid = [], [], [], f"chat-{uuid.uuid4().hex[:6]}"
+    sources, links, actions, used, cid = [], [], [], [], f"chat-{uuid.uuid4().hex[:6]}"
     ready = readiness()
     if not ready["ready"]:                           # no data yet: no model call, just ask for it
         tracelog.emit("Chat", "done", f"Waiting for data ({', '.join(ready['missing'])}): asked the owner to add it", cid)
@@ -467,22 +468,24 @@ def answer(history):
             calls = msg.get("tool_calls") or []
             if not calls:
                 tracelog.emit("Chat", "done", f"Answered from {len(set(sources))} sources", cid)
-                yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links))
+                yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links), actions)
                 return
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for c in calls:
                 name = c["function"]["name"]
                 args, out = _run_tool(name, c["function"].get("arguments"), cid)
-                yield _event(type="tool", text=_label(name, args))
+                yield _event(type="tool", text=_label(name, args), source="Dashboard" if name in LINK_TOOLS else _source(name, args))
                 if "link" in out and out["link"] not in links:          # a LINK_TOOLS button, or a what-if's
                     links.append(out["link"])
+                if out.get("action") and out["action"] not in actions:   # a LINK_TOOLS card
+                    actions.append(out["action"])
                 if name not in LINK_TOOLS and "error" not in out:
                     sources.append(_source(name, args))
                     used.append(name)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})
         msg = _ask(messages + [{"role": "user", "content": "Answer now with what you have found."}], None, cid=cid)
         tracelog.emit("Chat", "done", f"Answered after {MAX_ROUNDS} rounds of lookups", cid)
-        yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links))
+        yield _reply(msg.get("content"), sources, links, _sections(clean[-1]["content"], used, links), actions)
     except ChatError as e:
         tracelog.emit("Chat", "error", str(e), cid)
         yield _event(type="error", text=str(e))
