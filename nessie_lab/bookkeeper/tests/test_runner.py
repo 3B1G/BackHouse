@@ -285,14 +285,22 @@ async def test_asi_retries_stalled_and_dropped_streams(monkeypatch, caplog):
     assert len(sent) == 2 and message["content"] == "ok" and message["retries"] == 1      # the partial reply is discarded
 
 
-async def test_asi_gives_up_after_retries_and_never_retries_http_errors(monkeypatch):
+async def test_asi_gives_up_after_retries_and_retries_only_transient_http_errors(monkeypatch, caplog):
     from bookkeeper.runner import ASIClient
     sent, _ = mock_asi(monkeypatch, httpx.ReadTimeout)
     with pytest.raises(httpx.ReadTimeout):
         await ASIClient(api_key="test-only").complete([{"role": "user", "content": "x"}], [])
     assert len(sent) == 3
-    sent, _ = mock_asi(monkeypatch, 500)
-    with pytest.raises(RuntimeError, match="HTTP 500"):
+    sent, _ = mock_asi(monkeypatch, 500, ok_reply())                  # the server's transient failure: retried
+    message = await ASIClient(api_key="test-only").complete([{"role": "user", "content": "x"}], [])
+    assert len(sent) == 2 and message["content"] == "ok" and message["retries"] == 1
+    assert "ASI call failed (ASI API returned HTTP 500); retry 1/2" in caplog.text
+    sent, _ = mock_asi(monkeypatch, 503)
+    with pytest.raises(RuntimeError, match="HTTP 503"):              # ...until the retries run out
+        await ASIClient(api_key="test-only").complete([{"role": "user", "content": "x"}], [])
+    assert len(sent) == 3
+    sent, _ = mock_asi(monkeypatch, 401)
+    with pytest.raises(RuntimeError, match="HTTP 401"):              # any other HTTP error fails at once
         await ASIClient(api_key="test-only").complete([{"role": "user", "content": "x"}], [])
     assert len(sent) == 1
     mock_asi(monkeypatch, ok_reply())

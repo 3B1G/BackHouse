@@ -73,7 +73,21 @@ The client sends a standard `ChatMessage`, receives an immediate acknowledgement
 
 ## ASI orchestrator integration
 
-For Agentverse connectivity set `BOOKKEEPER_MAILBOX=true` and `VERIFIER_MAILBOX=true`, keep both seeds stable, set `BOOKKEEPER_VERIFIER_ADDRESS` and `VERIFIER_BOOKKEEPER_ADDRESS` if the agents do not share one `.env`, start `serve-verifier` and `serve`, and connect each agent to an Agentverse mailbox using the startup instructions. This external account setup is required before an ASI orchestrator can contact it; installing the package alone does not publish a reachable agent.
+To bring the agents online on Agentverse, run from `nessie_lab/`:
+
+```bash
+./online.sh
+```
+
+It starts the Verifier, the Bookkeeper and the orchestrator in mailbox mode, prefixes their output with `[verifier]`, `[bookkeeper]` and `[orchestrator]`, prints the three addresses once they are up, and stops all of them cleanly on Ctrl-C, or as soon as one exits. It sets `<AGENT>_MAILBOX` only for the processes it starts, so with `.env` left at `false` the script is the only way they go online and a plain `serve` stays local. It refuses to start when port 8001, 8003 or 8005 is already in use. Keep the seeds stable: they fix the addresses, and each address has its own mailbox. The three agents talk through Agentverse but share this folder's `data/`: the Bookkeeper's reply names a report file and the orchestrator reads it from there, so they run on one machine.
+
+A mailbox agent advertises its Agentverse mailbox, not a local endpoint, and finds its peers through the Almanac, so every agent needs a mailbox. The script checks first (`bookkeeper mailbox-status BOOKKEEPER VERIFIER ORCHESTRATOR`). The first time a seed is used it needs `AGENTVERSE_TOKEN` (an Agentverse API key) in `.env`: it starts that agent briefly with its inspector on, creates the mailbox through the inspector's `POST /connect` (`bookkeeper mailbox-connect --port …`, or `python -m orchestrator.register` for the orchestrator), and restarts it without the inspector. The inspector routes (`/connect`, `/disconnect`, `/messages`) accept requests from any web origin, so a page open in your browser could connect the agent to another account while they are served; `<PREFIX>_INSPECTOR=true` turns them on only for that step. To connect by hand instead, start the agent with that flag, open the `Agent inspector available at …` link it logs while signed in to Agentverse, and choose **Connect**, **Mailbox**, **Finish**.
+
+In mailbox mode, messages arrive through the mailbox. The agent's own server listens on 127.0.0.1 only and serves `GET /health`; without a REST route, uagents 0.26.1 stops a mailbox agent right after startup. Registration uses the Almanac API alone, with a 10-second timeout (uagents' 1-second default is shorter than the API's reply time); a mailbox agent needs no on-chain registration, which wants FET in the agent's wallet.
+
+This external account setup is required before an ASI orchestrator can contact it; installing the package alone does not publish a reachable agent.
+
+**Who it answers.** People talk to the orchestrator, which understands plain language and sends the Bookkeeper the request below. A mailbox Bookkeeper runs requests only from the orchestrator (`BOOKKEEPER_ORCHESTRATOR_ADDRESS`, or derived from `ORCHESTRATOR_SEED` when they share `.env`) and from `BOOKKEEPER_ALLOWED_SENDERS` (comma-separated, such as the owner's ASI:One address): each run is two investigations of ASI usage. Anyone else, and anyone but its Bookkeeper on the Verifier, is logged and gets one short note an hour, so two refusing agents can't loop. In local mode only local peers can reach it, as before.
 
 Send a `ChatMessage` with one `TextContent` containing:
 
@@ -81,7 +95,7 @@ Send a `ChatMessage` with one `TextContent` containing:
 {"request_id":"orchestrator-job-1","nessie_tag":"boh-1loc","as_of":"2026-07-24"}
 ```
 
-`as_of` and `nessie_tag` are optional. The handler acknowledges the incoming message ID, retains the session context, sends the draft to the Verifier, and, when the Verifier replies, sends the same result shape as the CLI, followed by `EndSessionContent`. Invalid requests, failed runs and failed verifications receive `status: "error"` and no filename (`trace_id` names the Bookkeeper's or the Verifier's trace). Requests are serialized in each service process; multiple server processes of one agent sharing the output directory are not supported. Bookkeeper and Verifier must share the data directory.
+`as_of` and `nessie_tag` are optional. The handler acknowledges the incoming message ID, retains the session context, sends the draft to the Verifier, and, when the Verifier replies, sends the same result shape as the CLI plus a `summary` a person can read (finding counts, total, recoverable and ongoing impact, the three largest findings), followed by `EndSessionContent`. A sender other than the orchestrator first gets a plain-text note that a new run has started and can take up to an hour; it is prose, not JSON, so the orchestrator's reply matcher could never mistake it for the result. Invalid requests, failed runs and failed verifications receive `status: "error"` and no filename (`trace_id` names the Bookkeeper's or the Verifier's trace). A request that is not a valid `ReportRequest` is answered with what is wrong (for example, which fields are unknown) and the accepted format, so ASI:One's model can correct it, and is logged with its sender and the first 200 characters of its text. Requests are serialized in each service process; multiple server processes of one agent sharing the output directory are not supported. Bookkeeper and Verifier must share the data directory.
 
 The ASI model uses `https://api.asi1.ai/v1/chat/completions`.
 
@@ -127,7 +141,7 @@ tokens never times out; a stalled one fails fast. Debug logging reports long rep
 stalls or loses its connection, even partway through a reply, is retried `ASI_RETRIES` times (default 2), waiting
 `ASI_RETRY_BACKOFF_SECONDS` × attempt (default 5 s) in between; the run fails only if every
 attempt does. Retries are logged and recorded as `retries` on the call's trace event.
-HTTP errors and output-limit cut-offs are not retried.
+HTTP 429, 500, 502, 503 and 504 (the server's transient failures) are retried the same way; other HTTP errors, such as 401 for a bad key, and output-limit cut-offs are not.
 
 If batches' result-writing calls fail with a transport error, resume them without repeating
 the investigation:

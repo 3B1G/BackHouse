@@ -27,7 +27,12 @@ TRACE_FORMAT = "batched/1"
 TRANSPORT_ERRORS = {"ReadTimeout", "ConnectTimeout", "WriteTimeout", "PoolTimeout", "ReadError", "ConnectError"}
 ASI_URL = "https://api.asi1.ai/v1/chat/completions"
 PROGRESS_SECONDS = 30                 # debug-log a long streamed reply this often
+RETRY_STATUSES = {429, 500, 502, 503, 504}    # the ASI server's transient failures; other HTTP errors fail at once
 SOURCE_KEYS = ("nessie_tag", "bank_snapshot", "bank_rows", "books_db")
+
+
+class TransientHTTPError(RuntimeError):
+    """An ASI HTTP status worth retrying (RETRY_STATUSES); the message keeps the form failure_message passes on."""
 
 
 class OutputTruncated(RuntimeError):
@@ -57,7 +62,8 @@ def failure_message(exc: Exception) -> str:
 
 
 class ASIClient:
-    """Minimal streaming ASI client; a dropped or stalled call is retried, other errors fail the run without model repair loops.
+    """Minimal streaming ASI client; a dropped or stalled call, or a transient server error (RETRY_STATUSES), is retried;
+    other errors fail the run without model repair loops.
 
     Replies stream, so the read timeouts bound the silence between chunks, not a whole call: asi1 reasons at length and a
     reply can take minutes."""
@@ -97,10 +103,11 @@ class ASIClient:
             try:
                 message = await self._stream(payload, timeout)
                 break
-            except httpx.TransportError as exc:        # stalls and dropped connections, even mid-stream; HTTP errors are not retried
-                if attempt > self.retries:
+            except (httpx.TransportError, TransientHTTPError) as exc:   # stalls and dropped connections, even
+                if attempt > self.retries:                                 # mid-stream, and 429/5xx; not other HTTP errors
                     raise
-                LOG.warning("ASI call failed (%s); retry %s/%s in %ss", type(exc).__name__, attempt, self.retries,
+                LOG.warning("ASI call failed (%s); retry %s/%s in %ss",
+                            exc if isinstance(exc, TransientHTTPError) else type(exc).__name__, attempt, self.retries,
                             self.backoff * attempt)
                 await asyncio.sleep(self.backoff * attempt)
         if attempt > 1:
@@ -115,7 +122,8 @@ class ASIClient:
             async with client.stream("POST", ASI_URL, headers={"Authorization": f"Bearer {self.key}"}, json=payload) as response:
                 if response.status_code >= 400:
                     await response.aread()
-                    raise RuntimeError(f"ASI API returned HTTP {response.status_code}")
+                    error = TransientHTTPError if response.status_code in RETRY_STATUSES else RuntimeError
+                    raise error(f"ASI API returned HTTP {response.status_code}")
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -194,6 +202,11 @@ def checked(result, problems, batch, record):
     record["dropped_findings"] = [{"id": fid, "problems": p} for fid, p in problems.items()]
     LOG.info("%s: left out %s finding(s) that break the hand-off rules", batch.id, len(problems))
     return drop_findings(result, problems, batch)
+
+
+def request_hash(sender, request_id):
+    """The request key: a sender's request_id names one report, R-<this>."""
+    return hashlib.sha256(f"{sender}\0{request_id}".encode()).hexdigest()
 
 
 def draft_name(report_id, round=1):
@@ -441,9 +454,15 @@ class Bookkeeper:
                   if isinstance(e, BaseException)]
         return records, outcomes, errors
 
+    def started(self, request: ReportRequest, sender="local") -> bool:
+        """Whether this request already has a report or a draft, so answering it needs no new investigation."""
+        key, data = request_hash(sender, request.request_id), self.root / "data"
+        return ((data / "reports" / "requests" / f"{key}.json").exists() or (data / "reports" / f"R-{key}.json").exists()
+                or any((data / "drafts").glob(f"R-{key}*.json")))
+
     # ------------------------------------------------------------ a new run
     async def _run(self, request, sender):
-        request_key = hashlib.sha256(f"{sender}\0{request.request_id}".encode()).hexdigest()
+        request_key = request_hash(sender, request.request_id)
         receipt = self.root / "data" / "reports" / "requests" / f"{request_key}.json"
         request_data = request.model_dump(mode="json")
         if receipt.exists():

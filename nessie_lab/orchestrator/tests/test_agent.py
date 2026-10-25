@@ -303,7 +303,8 @@ async def test_rest_ask_runs_the_same_turn():
     assert (await ask(ctx, AskRequest(text="x" * 5000, session_id="b"))).status == "error"
 
 
-def test_make_agent_requires_a_seed(tmp_path):
+def test_make_agent_requires_a_seed(tmp_path, monkeypatch):
+    monkeypatch.delenv("ORCHESTRATOR_SEED", raising=False)     # whatever the developer's .env says
     with pytest.raises(ValueError, match="ORCHESTRATOR_SEED"):
         agent_mod.make_agent(tmp_path)
 

@@ -333,6 +333,26 @@ async def test_agent_fails_fast_then_in_process_fallback_is_degraded(session, bk
     assert "degraded: the Bookkeeper agent send failed" in out["notes"][0]
 
 
+async def test_agent_that_ran_and_failed_is_not_rerun_in_process(session, bk, monkeypatch):
+    from orchestrator.agent import chat_message
+    from uagents_core.contrib.protocols.chat import TextContent
+
+    fake = FakeRunner(session.root)
+    monkeypatch.setattr(R.subprocess, "run", fake)
+    svc = _service(session)
+
+    async def send(dest, msg):
+        body = json.loads(msg.content[0].text)
+        reply = {"request_id": body["request_id"], "status": "error", "error": "ASI API returned HTTP 500",
+                 "error_type": "RuntimeError", "trace_id": None}
+        asyncio.get_running_loop().call_soon(
+            svc.replies.deliver, "agent1qbk", chat_message([TextContent(type="text", text=json.dumps(reply))]))
+
+    out = await svc.bookkeeper_op(SimpleNamespace(send=send, logger=Mock()), "setup")
+    assert out["status"] == "error" and "HTTP 500" in out["error"] and fake.calls == []
+    assert out["notes"] == ["Bookkeeper agent failed; not rerun in-process"]
+
+
 async def test_agent_timeout_is_not_rerun_in_process(session, bk, monkeypatch):
     fake = FakeRunner(session.root)
     monkeypatch.setattr(R.subprocess, "run", fake)

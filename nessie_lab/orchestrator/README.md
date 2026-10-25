@@ -267,8 +267,9 @@ offline unless `--agents` is passed (then they go through the running `serve`).
   `{request_id, nessie_tag, as_of}` to the Bookkeeper. It answers once, after its Verifier loop, from the handler of
   the Verifier's reply, i.e. outside `send_and_receive`'s session, so the orchestrator matches the reply by
   `request_id` (`PeerReplies`, at most 8 waiting). A success is `{request_id, report_id, filename, as_of,
-  verified}`; `{status: "error", error, trace_id}` is an error. A Bookkeeper that fails fast falls back to the
-  subprocess (degraded); one that times out is NOT rerun in-process (it may still be running).
+  verified}`; `{status: "error", error, trace_id}` is an error. Only a request that never reached the Bookkeeper
+  (`AgentUnreachable`) falls back to the subprocess (degraded). One that times out (it may still be running) or
+  replies with an error (it ran) is NOT rerun in-process: a second run would double the ASI calls.
 - A chat never starts a Bookkeeper run, unless `ORCHESTRATOR_USE_AGENTS=1` is set explicitly: then, as before, an
   owner's `get_findings` with no baseline yet asks the Bookkeeper for one (and usually times out at 25 s).
 - In local mode, both peers must be in `ORCHESTRATOR_PEERS` so their replies can be resolved. The scout must also
@@ -336,22 +337,34 @@ const answer = await (await fetch(`${API}/api/ask`, {
 
 ## Agentverse / ASI:One
 
-1. Set `ORCHESTRATOR_SEED` (private and stable: it fixes the address) and `ORCHESTRATOR_API_KEY`.
-2. Start the agent: `ORCHESTRATOR_MAILBOX=1 python -m uv run --project orchestrator orchestrator serve`.
-3. Connect the mailbox: `AGENTVERSE_TOKEN=... python -m uv run --project orchestrator python -m orchestrator.register`.
-   This POSTs `{"user_token", "agent_type": "mailbox"}` to `http://127.0.0.1:8005/connect` (the endpoint uagents
+`./online.sh` (in `nessie_lab/`) brings the orchestrator, the Bookkeeper and its Verifier online together, each in
+mailbox mode, and stops them together on Ctrl-C; `nessie_lab/bookkeeper/README.md` ("ASI orchestrator integration")
+describes it. They talk through their Agentverse mailboxes and share `data/`, so they run on one machine. In
+`nessie_lab/.env`:
+
+1. `ORCHESTRATOR_SEED` (private and stable: it fixes the address) and `ORCHESTRATOR_API_KEY` (or `ASI1_API_KEY`).
+2. `BOOKKEEPER_ADDR`: the Bookkeeper's address, which `./online.sh` prints. With the Bookkeeper's seed in the same
+   `.env`, the Bookkeeper derives the orchestrator's address from `ORCHESTRATOR_SEED` and runs its requests.
+3. `ORCHESTRATOR_OWNERS` and `BOOKKEEPER_ALLOWED_SENDERS`: your ASI:One address, so you can propose changes and, with
+   `ORCHESTRATOR_USE_AGENTS=1`, start Bookkeeper runs from chat.
+4. `AGENTVERSE_TOKEN`, the first time only: the script creates the mailbox with `python -m orchestrator.register`.
+   That POSTs `{"user_token", "agent_type": "mailbox"}` to `http://127.0.0.1:8005/connect` (the endpoint uagents
    0.26.1 adds when the inspector is on) with the agent's REST token from `data/orchestrator/rest_token`. Neither
-   token is printed. The browser Agent Inspector can't do this: the agent refuses requests from web origins.
-4. On Agentverse, give the agent a name and a README that includes the two badges above. It then shows up in
-   ASI:One chat.
+   token is printed. The browser Agent Inspector can't do this: the agent refuses requests from web origins. Later
+   runs start with `ORCHESTRATOR_INSPECTOR=false`.
+
+Then, with the agents online, `orchestrator bookkeeper-setup --agents` (or `bookkeeper-update --agents`) asks the
+Bookkeeper over Agentverse. On Agentverse, give the agent a name and a README that includes the two badges above. It
+then shows up in ASI:One chat.
 
 ## Agents
 
 | Agent | Name on Agentverse | Address |
 |---|---|---|
-| Orchestrator (ASI) | `<name>` | `agent1<...>` |
+| Orchestrator (ASI) | `hermes_orchestrator` (`@hermes-orchestrator`) | `agent1qd28hf578hly342hr5zq59uc25ra27ae0grc46wq6m9tnzl5f8kx5zyrp8r` |
 | Market scout | `<name>` | `agent1<...>` |
-| Bookkeeper | `<name>` | `agent1<...>` |
+| Bookkeeper | `bookkeeper` | `agent1qdjydrlnh7x8fnh4rlyhmfg8q3ehwrwzfgv4g8u9ztxyjmdqaet52nyyk76` |
+| Bookkeeper's Verifier | `bookkeeper-verifier` | `agent1qted2t6kzvgwqed6cwzxjk89h47xyelzqp93l49mmwrtck5ekh8hvrf0gt3` |
 
 ## Environment
 
@@ -402,7 +415,7 @@ const answer = await (await fetch(`${API}/api/ask`, {
   `propose_fix`. The scout agent's `MarketResult` is mapped through its report file into the in-process shape, or
   the in-process scan runs and the reply is marked degraded.
 - **No loops.** Our own address is dropped. A message carrying `EndSessionContent`, a review card or one of our
-  notices (tagged `backhouse_notice` and starting "BackHouse notice:") never starts a turn. Rate-limit, busy and
+  notices (tagged `backhouse_notice` and starting "Hermes notice:") never starts a turn. Rate-limit, busy and
   refusal notices go out once per sender per window. The rate limiter forgets idle senders and keeps at most 5,000.
 - **HTTP.** uagents' server is wrapped (`GuardedServer`): no proxy headers (X-Forwarded-For is ignored), a bearer
   token on `/ask`, `/bookkeeper`, `/connect` and every `/api` route, and `/messages` is never served. CORS headers
