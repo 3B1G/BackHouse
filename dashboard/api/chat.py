@@ -141,9 +141,28 @@ def _menu_change(args, cid=None):
     if fc.get("error"):
         return {"error": str(fc["error"])[:300]}
     vs, before, after = fc.get("vs_base") or {}, fc.get("before") or {}, fc.get("after") or {}
-    return {"change": scenario["name"], "starts": start, "days_later_on_average": vs.get("days_moved_average"),
+    days = vs.get("days_moved_average")
+    return {"change": scenario["name"], "starts": start, "days_later_on_average": days,
             "likely_out_of_cash_before": before.get("run_out_likely"), "likely_out_of_cash_after": after.get("run_out_likely"),
-            "monthly_cash_effect_cents": fc.get("monthly_cash_effect_cents"), "cash_change_cents": vs.get("cash_change_cents")}
+            "monthly_cash_effect_cents": fc.get("monthly_cash_effect_cents"), "cash_change_cents": vs.get("cash_change_cents"),
+            **_button(prices, remove, days, cid)}
+
+
+def _button(prices, remove, days, cid=None):
+    """A what-if that prices one dish and keeps cash at least a day longer comes with the button to that change on the
+    dashboard, so the owner doesn't have to ask for it. None when the dashboard couldn't take the change: the dish has an
+    approved change that hasn't started, or the owner's review isn't signed yet."""
+    if len(prices) != 1 or remove or days is None or round(days) < 1:
+        return {}
+    dish, cents = next(iter(prices.items()))
+    ctx = orchestrator_bridge.context(cid) or {}
+    if ctx.get("stage") != "Suggest" or any(c.get("item") == dish for c in ctx.get("upcoming") or []):
+        return {}
+    made = _open_change({"dish": dish, "price": cents / 100})
+    if "link" not in made:
+        return {}
+    return {"link": made["link"], "note": "It helps, so the button under your answer already takes the owner to this change "
+            "on the dashboard, where they approve or decline it. Point to the button in a few words; don't offer to make one."}
 
 
 def _menu(cid=None):
@@ -281,6 +300,7 @@ How to answer:
   a suggested change, or to set a dish's price, say in one sentence that you can't do it yourself, and call open_change
   with the dish (and their price, if they named one): they get a button to that change on the dashboard, where they set
   the price and approve or decline it. Never describe dashboard screens or steps from memory.
+- When a tool result says a button is already under your answer, point to it in a few words; never offer to make one.
 - Lead with the answer. Keep it to 2 to 5 short sentences, and use a short bullet list only for several items.
 - Name where a number came from (the bank, your records, the forecast) when it matters.
 - Write dates like "June 25, 2027", never as 2027-06-25.
@@ -390,8 +410,8 @@ def _sections(question, tools, links):
 
 
 def _reply(text, sources, links=(), sections=()):
-    """The answer event, with any buttons open_change made and the related parts of the dashboard. An answer with code in
-    it is off topic by definition here, so it is swapped for the refusal."""
+    """The answer event, with any buttons open_change or a what-if made, and the related parts of the dashboard. An
+    answer with code in it is off topic by definition here, so it is swapped for the refusal."""
     text = (text or "").strip()
     if CODE.search(text):
         return _event(type="answer", text=OFF_TOPIC, sources=[], off_topic=True)
@@ -432,9 +452,9 @@ def answer(history):
                 name = c["function"]["name"]
                 args, out = _run_tool(name, c["function"].get("arguments"), cid)
                 yield _event(type="tool", text=_label(name, args))
-                if name == "open_change" and "link" in out and out["link"] not in links:
+                if "link" in out and out["link"] not in links:          # open_change's button, or a what-if's
                     links.append(out["link"])
-                elif "error" not in out:
+                if name != "open_change" and "error" not in out:
                     sources.append(_source(name, args))
                     used.append(name)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})
