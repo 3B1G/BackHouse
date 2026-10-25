@@ -58,10 +58,19 @@ unpaid at 2026-10-24: the same 27 items as Nessie's pending bills) or `scheduled
 principal). Status comes from the books only, never the bank: an autopay invoice the bank never paid stays `paid`, and finding
 that is the Bookkeeper's job. Cost ids match the books' references, so they work as `books_ref` in `grade.py`.
 
-`bookkeeper_tools.py` gives the agent 11 read-only tools as Claude tool definitions (`TOOLS`). Each reads one source:
+The projection itself lives in `bookkeeper/src/bookkeeper/book_projection.py` (a pure function, shared with Bookkeeper, which
+rebuilds the Book in memory at each report's cutoff with evidence-based statuses instead of reading `costs`).
+
+`bookkeeper_tools.py` gives the agent 11 read-only tools as Claude tool definitions (`TOOLS`). It is a compatibility wrapper:
+the one implementation is `bookkeeper/src/bookkeeper/bookkeeper_tools.py`, packaged with Bookkeeper, run here in legacy mode
+(synthetic `bank_id`s, the Book's statuses, no cutoff; it projects the Book in memory, so it does not need `build_book.py` to
+have run). Bookkeeper uses the same 11 tools in historical mode; see `bookkeeper/README.md`. Each tool reads one source:
 bank (the Nessie sync): `get_bank_transaction`, `search_bank_transactions`, `get_payee_history`, `get_bank_bills`, `get_account_balances`;
 book: `search_costs`, `get_cost`, `get_agreements`, `get_card_batches`, `get_cash_deposit_slips`, `get_delivery_payouts`.
 `ToolSession(max_calls=8)` enforces the call budget and records the trace for `checks.py`; the module docstring has the agent loop.
+Lists are paged (`limit` at most 50, `offset`, `truncated`, `next_offset`; totals cover every match) and related lists are capped.
+Card batches, cash slips and delivery payouts come back matched to their bank deposits (`match_status`, `difference_cents`;
+`exceptions_only=true` for just the rows that do not reconcile).
 `load_bank_frame()` returns the Nessie copy shaped like `bank_feed.csv`. Amount searches should carry a date window: a supplier's
 other invoices can have near-identical amounts months apart.
 
@@ -74,7 +83,7 @@ The generator is deterministic (seed 13). Two runs produce byte-identical files.
 | `data/books.db` | agents | The restaurant's own documents (below). No "expected bank" table: agents derive expectations |
 | `data/bank_feed.csv` | agents, Nessie loader | Bank-visible columns only: `bank_id, account, date, nessie_type, direction, amount, counterparty (purchases only), memo` |
 | `data/features.db` | agents | Feature tables built from the two above |
-| `data/nessie_sync_<tag>.db` | agents | The bank as pulled back from Nessie: `bank_tx` (bank_feed.csv columns + nessie_id, status), `bank_bills`, `bank_accounts` |
+| `data/nessie_sync_<tag>.db` | agents | The bank as pulled back from Nessie: `bank_tx` (bank_feed.csv columns + nessie_id, status), `bank_bills` (opening balances come from `books.db` `accounts`) |
 | `data/grader/` | **scoring scripts only** | `answer_key.json`, `ledger_expected.csv`, `bank_truth.csv`. Never load into Nessie or an agent's context |
 
 ### books.db tables
@@ -146,3 +155,21 @@ Tag `boh-dev` (and its manifest) holds the **two-location** data. Load the singl
 
 Amounts are **integer cents everywhere**, including bills, loan and account balances (the account nickname says so).
 Each transaction description ends with `|ref=<bank_id>` for round-trip matching only. Agents must not use it to detect errors.
+
+## Bookkeeper AI agent
+
+The [Bookkeeper subproject](bookkeeper/README.md) uses its own Python 3.13 environment
+for uAgents, leaving this data project's Python 3.14 environment unchanged:
+
+```bash
+uv python install 3.13
+uv sync --project bookkeeper
+uv run --project bookkeeper bookkeeper run --request-id first-report
+```
+
+Set `ASI1_API_KEY` in the root `.env` or environment before generating a report.
+It uses two simulated read-only tools over the existing Nessie snapshot and books,
+then returns a saved report filename. Each report is drafted by the Bookkeeper and published by an
+independent Verifier agent, which keeps only the findings both investigations agree on;
+Monte Carlo integration remains future work. See the subproject README
+for the local uAgent client, ASI orchestrator integration, and tests.
