@@ -23,6 +23,7 @@ What the Bookkeeper's Verifier loop said (bk schema 1.2: bk_adapter.verified_sta
 "replaced" | "verifier_only") is INFORMATION for the owner, shown next to each finding by summary(); it never passes
 a finding by itself. The stage gates and the owner-review flow that collects `decisions` (stages.py, review.py) are
 built on this hook."""
+from . import env  # noqa: F401  (puts nessie_lab on sys.path for contracts)
 import contracts as K
 
 from . import bk_adapter as A

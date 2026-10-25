@@ -41,7 +41,7 @@ export type Scenario = {
   effect_days: number | null;
 };
 
-export type StepId = "bank" | "records" | "matcher" | "bookkeeper" | "forecast";
+export type StepId = "bank" | "records" | "matcher" | "bookkeeper" | "forecast" | "market" | "orchestrator";
 export type StepState = "working" | "done" | "waiting";
 export type StepEvent = { type: "step"; step: StepId; state: StepState; text: string; t: number; forecast?: Forecast };
 
@@ -62,10 +62,54 @@ export type Finding = {
   confidence: number;
 };
 
+/** One change the orchestrator suggests: dry-run by Changes and saved for the owner to approve at their terminal. */
+export type Fix = {
+  id: string;
+  action: string;
+  title: string;
+  dish: string | null;
+  old_price_cents: number | null;
+  new_price_cents: number | null;
+  market_median_cents: number | null;
+  price_cents: number | null;
+  food_cost_pct: number | null;
+  starts: string | null;
+  runout_before: string | null;
+  runout_after: string | null;
+  days_later: number | null;
+  monthly_cents: number | null;
+  approve: string;
+  file: string;
+};
+
+/** One dish against nearby restaurants' own menus, from Market scout. gap_pct: 0.08 is 8% above the middle price. */
+export type PricePosition = {
+  our_item: string;
+  our_price_cents: number;
+  competitor_median_cents: number | null;
+  competitor_low_cents: number | null;
+  competitor_high_cents: number | null;
+  n_prices: number;
+  position: "below_market" | "at_par" | "above_market" | "insufficient_data";
+  gap_pct: number | null;
+};
+
+/** The orchestrator's brief at the end of a check. */
+export type Plan = {
+  stage?: { stage: string | null; why: string | null } | null;
+  as_of: string | null;
+  cash_cents: number | null;
+  bills: { before: string; count: number; total_cents: number } | null;
+  market: { offline: boolean; menu_as_of: string; positions: PricePosition[] } | null;
+  fixes: Fix[];
+  brief: string;
+};
+
 export type RunEvent =
   | { type: "run"; restaurant: string; t: number }
   | StepEvent
   | { type: "finding"; finding: Finding; t: number }
+  | { type: "plan"; plan: Plan; t: number }
   | { type: "done"; t: number }
   | { type: "error"; text: string; t: number };
 

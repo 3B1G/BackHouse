@@ -272,7 +272,7 @@ def _current(session) -> StageView:
     fp = fingerprint(root, tag, src["as_of"])
     changed = [label for k, label in FP_PARTS.items() if fp.get(k) != st["fingerprint"].get(k)]
     if changed:
-        return StageView(AUDIT, f"the data changed since the audit ({', '.join(changed)}): {UPDATE_HINT}", **base)
+        return StageView(AUDIT, f"the data changed since the audit ({', '.join(changed)}): the owner runs `orchestrator bookkeeper-update`", **base)
     opened = tuple((k, src["ids"][k]) for k in src["keys"])
     shas = {k: review.finding_sha(f) for k, f in src["keys"].items()}
     proposals = {k: d for k, d in (st.get("proposals") or {}).items()

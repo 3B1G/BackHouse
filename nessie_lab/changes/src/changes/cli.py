@@ -88,6 +88,9 @@ def question(shown: dict, ops: list[dict] | None, today: date) -> str:
         return f"Pay {target} " + (f"today ({to})" if to == today.isoformat() else f"on {to}")
     if action == "dispute_charge":
         return f"Dispute {target}"
+    if action == "other" and str(shown.get("suggestion_id", "")).startswith("review-"):
+        n = len(shown.get("assumptions") or [])
+        return f"Commit the owner's review of {target} ({n} decisions, listed above; nothing is applied)"
     return f"{action} on {target} (CH cannot apply this action)"
 
 

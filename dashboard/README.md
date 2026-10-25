@@ -9,6 +9,14 @@ You need uv, Node 20 or newer with pnpm, and a `.env` at the repo root with `NES
 stay on the server; the browser never sees them. A check reads the sample restaurant's books, so generate them once
 first (`python generate.py` in `nessie_lab/`, see its README).
 
+A check ends with the orchestrator's brief, which runs in the orchestrator's own environment (uv sets it up on the first
+check). It needs two more things once, from `nessie_lab/`:
+
+    uv run --project cost_price cost-price build                        # the menu, plate costs and competitor list
+    uv run --project market_scout market-scout run --request-id first   # saves nearby menus; later checks read the copies
+
+The second one fetches the competitors' own menu pages, so run it while online. `market-scout pages` lists what's saved.
+
 From the repo root, start the server:
 
     uv run --project dashboard uvicorn main:app --app-dir dashboard/api --port 8000
