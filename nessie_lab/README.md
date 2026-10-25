@@ -146,3 +146,20 @@ Tag `boh-dev` (and its manifest) holds the **two-location** data. Load the singl
 
 Amounts are **integer cents everywhere**, including bills, loan and account balances (the account nickname says so).
 Each transaction description ends with `|ref=<bank_id>` for round-trip matching only. Agents must not use it to detect errors.
+
+## Bookkeeper AI agent
+
+The [Bookkeeper subproject](bookkeeper/README.md) uses its own Python 3.13 environment
+for uAgents, leaving this data project's Python 3.14 environment unchanged:
+
+```bash
+uv python install 3.13
+uv sync --project bookkeeper
+uv run --project bookkeeper bookkeeper run --request-id first-report
+```
+
+Set `ASI1_API_KEY` in the root `.env` or environment before generating a report.
+It uses two simulated read-only tools over the existing Nessie snapshot and books,
+then returns a saved report filename. Reports are **unverified** in V1; a separate
+verifier and Monte Carlo integration remain future work. See the subproject README
+for the local uAgent client, ASI orchestrator integration, and tests.

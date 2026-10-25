@@ -1,0 +1,23 @@
+[project]
+name = "nessie-lab"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Ravneet Singh Bhatia", email = "ravneet.bhatia@outlook.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.8",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "requests>=2.31",
+    "tabulate>=0.9",
+]
+
+[project.scripts]
+nessie-lab = "nessie_lab:main"
+
+[build-system]
+requires = ["uv_build>=0.12.19,<0.13.0"]
+build-backend = "uv_build"
