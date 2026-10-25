@@ -6,15 +6,22 @@ allows) in data/market_scout/local_client_seed, which is gitignored. A seed in t
 
 Where it listens: uagents 0.26.1 has no host option (Agent takes only a port; uagents.asgi.ASGIServer.serve binds the
 module constant uagents.asgi.HOST = "0.0.0.0"). serve sets that constant to 127.0.0.1 before starting, so the agent
-is not reachable from the Wi-Fi; MARKET_SCOUT_BIND_HOST overrides it (e.g. 0.0.0.0 for a real deployment)."""
+is not reachable from the Wi-Fi; MARKET_SCOUT_BIND_HOST overrides it (e.g. 0.0.0.0 for a real deployment).
+
+Who it can answer in local (non-mailbox) mode: the local demo client, plus MARKET_SCOUT_PEERS
+(`agent1...=http://127.0.0.1:8005/submit`, comma-separated), e.g. the orchestrator. A peer entry only says where to
+deliver a reply; it grants nothing. A peer must also be in MARKET_SCOUT_ALLOWED_SENDERS, and is not added to it."""
 import json
+import logging
 import os
+import re
 import secrets
 import stat
 import time
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from uagents import Agent, Context, Protocol
@@ -26,10 +33,13 @@ from uagents_core.identity import Identity
 from uagents_core.registration import AgentRegistrationPolicy
 
 from .contracts import MarketRequest
-from .runner import Busy, MarketScout
+from .runner import FALSE, TRUE, Busy, MarketScout
 from .shared import DEFAULT_ROOT, private_dir
 
+LOG = logging.getLogger("market_scout")
 SEED_FILE = "local_client_seed"
+PEER_ADDRESS = re.compile(r"^agent1[0-9a-z]{1,120}$")
+LOCAL_HOSTS = ("127.0.0.1", "localhost")
 RATE_LIMIT, RATE_WINDOW = 5, 600                   # requests per sender per 10 minutes
 
 
@@ -87,6 +97,62 @@ def listed_senders() -> set[str]:
 def allowed_senders(root: Path) -> set[str]:
     """MARKET_SCOUT_ALLOWED_SENDERS (comma-separated agent addresses); unset or empty = only the local demo client."""
     return listed_senders() or {local_client_address(root)}
+
+
+def env_flag(name: str) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if value in TRUE:
+        return True
+    if value in FALSE:
+        return False
+    raise ValueError(f"{name} must be 1 or 0 (or true/false), not {value[:20]!r}")
+
+
+def parse_peers(text: str | None, allow_remote=False) -> dict[str, str]:
+    """MARKET_SCOUT_PEERS -> {agent address: endpoint}. Each entry is `agent1...=http(s)://host:port/path`; the host
+    must be 127.0.0.1 or localhost unless allow_remote. Any malformed entry raises ValueError (serve won't start)."""
+    peers = {}
+    for i, entry in enumerate((text or "").split(",")):
+        entry = entry.strip()
+        if not entry:
+            continue
+        where = f"MARKET_SCOUT_PEERS entry {i + 1} ({entry[:80]!r})"
+        address, eq, endpoint = entry.partition("=")
+        address, endpoint = address.strip(), endpoint.strip()
+        if not eq or not address or not endpoint:
+            raise ValueError(f"{where}: expected agent1...=http://127.0.0.1:<port>/submit")
+        if not PEER_ADDRESS.match(address):
+            raise ValueError(f"{where}: the address must be an agent address starting with agent1")
+        if address in peers:
+            raise ValueError(f"{where}: {address[:20]}... is listed twice")
+        try:
+            parts = urlsplit(endpoint)
+            parts.port                                    # raises on a bad port
+        except ValueError:
+            raise ValueError(f"{where}: the endpoint is not a valid URL") from None
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(f"{where}: the endpoint must be an http(s) URL with a host")
+        if "@" in parts.netloc:
+            raise ValueError(f"{where}: the endpoint must not carry a user name or password")
+        if parts.hostname.lower() not in LOCAL_HOSTS and not allow_remote:
+            raise ValueError(f"{where}: the endpoint must be on 127.0.0.1 or localhost "
+                             "(set MARKET_SCOUT_PEERS_ALLOW_REMOTE=1 to allow other hosts)")
+        peers[address] = endpoint
+    return peers
+
+
+def env_peers() -> dict[str, str]:
+    return parse_peers(os.getenv("MARKET_SCOUT_PEERS"), env_flag("MARKET_SCOUT_PEERS_ALLOW_REMOTE"))
+
+
+def resolver_rules(root: Path) -> dict[str, str]:
+    """Local mode: where replies go. The local demo client, plus MARKET_SCOUT_PEERS (which may not redefine it)."""
+    client = local_client_address(root)
+    rules = {client: os.getenv("MARKET_SCOUT_LOCAL_CLIENT_ENDPOINT", "http://127.0.0.1:8004/submit")}
+    peers = env_peers()
+    if client in peers:
+        raise ValueError("MARKET_SCOUT_PEERS lists the local demo client; set MARKET_SCOUT_LOCAL_CLIENT_ENDPOINT instead")
+    return {**rules, **peers}
 
 
 class RateLimit:
@@ -156,24 +222,28 @@ def bind_localhost():
     return uagents.asgi.HOST
 
 
-def make_agent(root: Path, port=8003, local_only=False):
+def make_agent(root: Path, port=8003, local_only=False, offline=None):
     seed = os.getenv("MARKET_SCOUT_SEED")
     if not seed:
         raise ValueError("Set MARKET_SCOUT_SEED to a private, stable seed before serving")
     if not listed_senders() and not local_only:
         raise ValueError("Set MARKET_SCOUT_ALLOWED_SENDERS to the agent addresses the scout works for, or pass "
                          "--local-only to take requests only from this machine's local client")
-    bind_localhost()
+    peers = env_peers()                                   # validated in both modes: a typo refuses to start
     mailbox = os.getenv("MARKET_SCOUT_MAILBOX", "false").lower() == "true"
+    if mailbox and peers:
+        LOG.warning("MARKET_SCOUT_PEERS is ignored with MARKET_SCOUT_MAILBOX=true (replies go through the Almanac)")
+    for address in sorted(set(peers) - listed_senders()):
+        LOG.warning("peer %s... is not in MARKET_SCOUT_ALLOWED_SENDERS; its requests will be refused", address[:20])
+    bind_localhost()
     local_options = {} if mailbox else {
         "registration_policy": LocalRegistration(),
-        "resolve": RulesBasedResolver({local_client_address(root):
-            os.getenv("MARKET_SCOUT_LOCAL_CLIENT_ENDPOINT", "http://127.0.0.1:8004/submit")}),
+        "resolve": RulesBasedResolver(resolver_rules(root)),
     }
     agent = Agent(name="market_scout", seed=seed, port=port, mailbox=mailbox,
                   endpoint=[f"http://127.0.0.1:{port}/submit"], enable_agent_inspector=False,
                   publish_agent_details=mailbox, report_events=False, **local_options)
-    agent.include(build_protocol(MarketScout(root)), publish_manifest=mailbox)
+    agent.include(build_protocol(MarketScout(root, offline=offline)), publish_manifest=mailbox)
     return agent
 
 
