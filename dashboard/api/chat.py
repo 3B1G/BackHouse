@@ -64,6 +64,16 @@ OPEN_CHANGE = {
 }
 DISH = re.compile(r"^[A-Za-z0-9 &'(),.-]{1,80}$")
 
+OPEN_BOOKKEEPER = {
+    "name": "open_bookkeeper",
+    "description": "Give the owner a button to the Bookkeeper on the dashboard, where they can run it again: it checks for bank "
+                   "days it hasn't looked at and, if there are any, re-checks the books and writes a new report. Call it "
+                   "whenever the owner asks for a new Bookkeeper report, to run or rerun the Bookkeeper, or to check the "
+                   "books again: you can't start it yourself.",
+    "input_schema": {"type": "object", "additionalProperties": False, "required": [], "properties": {}},
+}
+LINK_TOOLS = ("open_change", "open_bookkeeper")  # they make a button; they look nothing up
+
 MENU = {
     "name": "get_menu",
     "description": "Read the menu as it is now: each dish's dine-in dinner price, its ingredient cost per plate and that cost "
@@ -87,6 +97,7 @@ LABELS = {
     "run_what_if": "Running a what-if on 1,000 futures",
     "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
     "open_change": "Finding that change on your dashboard",
+    "open_bookkeeper": "Finding the Bookkeeper on your dashboard",
     "get_menu": "Reading your menu",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
@@ -98,7 +109,7 @@ class ChatError(Exception):
 
 def _functions():
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE, MENU]]
+            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE, OPEN_BOOKKEEPER, MENU]]
 
 
 def _paydays(f):
@@ -219,6 +230,13 @@ def _open_change(args):
                     "your answer takes them to it on the dashboard, where they set the price and approve or decline it."}
 
 
+def _open_bookkeeper():
+    """A button to the Bookkeeper's run on the dashboard (bookkeeper_run.py). It starts nothing."""
+    return {"link": {"label": "Run the Bookkeeper on the dashboard", "href": "#/?section=dash-bookkeeper"},
+            "note": "Nothing has started. Tell the owner you can't run the Bookkeeper yourself, and that the button under "
+                    "your answer takes them to it on the dashboard, where they start it."}
+
+
 def _size(out):
     """A one-line summary of a tool result for the developer page."""
     if "error" in out:
@@ -249,6 +267,8 @@ def _run_tool(name, raw_args, cid=None):
             out = _open_change(args)
         except (ValueError, TypeError):
             out = {"error": "That price doesn't look right."}
+    elif name == "open_bookkeeper":
+        out = _open_bookkeeper()
     elif name == "get_menu":
         out = _menu(cid)
     else:
@@ -300,6 +320,8 @@ How to answer:
   a suggested change, or to set a dish's price, say in one sentence that you can't do it yourself, and call open_change
   with the dish (and their price, if they named one): they get a button to that change on the dashboard, where they set
   the price and approve or decline it. Never describe dashboard screens or steps from memory.
+- When the owner asks for a new Bookkeeper report, or to run the Bookkeeper or check the books again, say in one sentence
+  that you can't start it yourself, and call open_bookkeeper: they get a button to it on the dashboard.
 - When a tool result says a button is already under your answer, point to it in a few words; never offer to make one.
 - Lead with the answer. Keep it to 2 to 5 short sentences, and use a short bullet list only for several items.
 - Name where a number came from (the bank, your records, the forecast) when it matters.
@@ -452,9 +474,9 @@ def answer(history):
                 name = c["function"]["name"]
                 args, out = _run_tool(name, c["function"].get("arguments"), cid)
                 yield _event(type="tool", text=_label(name, args))
-                if "link" in out and out["link"] not in links:          # open_change's button, or a what-if's
+                if "link" in out and out["link"] not in links:          # a LINK_TOOLS button, or a what-if's
                     links.append(out["link"])
-                if name != "open_change" and "error" not in out:
+                if name not in LINK_TOOLS and "error" not in out:
                     sources.append(_source(name, args))
                     used.append(name)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})

@@ -13,6 +13,7 @@ import {
   type StepId,
 } from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
+import { BookkeeperRun } from "../components/BookkeeperRun";
 import { ChangesSection, type Focus } from "../components/ChangesSection";
 import { FindingsReview } from "../components/FindingsReview";
 import { Hero } from "../components/Hero";
@@ -199,6 +200,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; o
                 </p>
               </div>
             )}
+            <BookkeeperRun onFinished={refreshPlan} />
           </section>
 
           <div id="dash-changes" className="scroll-mt-28">
