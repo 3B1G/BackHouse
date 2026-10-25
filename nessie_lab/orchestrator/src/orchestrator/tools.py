@@ -4,6 +4,14 @@ Stage 1, "what is going on?": get_cash_position, list_bills_due, lookup (the Boo
 get_findings, scan_market, get_menu, list_upcoming_changes, forecast_base, forecast_scenario, bookkeeper_status.
 (Running the Bookkeeper, `orchestrator bookkeeper-setup` / `bookkeeper-update`, is the owner's; no tool does it.)
 Stage 2, "what do we do about it?": propose_fix (the Controller for one dish) and preview_suggestion.
+Owner review (review.py): review_status, propose_decision, propose_accept_verified_errors (proposals only).
+
+Stage gates (stages.py, STAGE_TOOLS below): Audit -> Review -> Commit -> Forecast -> Suggest, derived from disk on
+every call. `tools_for(session, owner)` is the list an LLM is offered right now, and `call` refuses any tool outside
+the current stage with a fixed message (nothing the caller sent is echoed). The forecast re-checks the stage itself
+(_inputs), always gets an explicit list of adjustments built from the owner's committed decisions and the review's
+as_of, and its result is dropped if the data moved while it ran. No tool records a commit: only the owner's
+passphrase-signed `changes approve` of the review suggestion does.
 
 Rules every tool keeps:
 - `call` never raises. A problem comes back as {"error": "..."}; arguments are validated against the tool's schema.
@@ -114,8 +122,27 @@ TOOLS: list[dict] = [
     _fn("bookkeeper_status", "Read-only: how far the Bookkeeper's review runs (baseline, covered through, days behind "
         "the bank, open / not re-reported / resolved finding counts, last run). Running the Bookkeeper is the "
         "owner's job at the terminal (orchestrator bookkeeper-update); no tool starts it."),
+    _fn("review_status", "Read-only: the current stage (Audit, Review, Commit, Forecast, Suggest) and why, every open "
+        "finding with its proposed decision, the batch of verified errors, and the owner's next command."),
+    _fn("propose_decision", "Review stage: PROPOSE the owner's decision on ONE open finding (accept: its adjustment "
+        "counts; dismiss: none; revise: back to the Bookkeeper). Only a proposal: the owner commits the review at the "
+        "terminal. A note is kept only if the owner wrote it in this chat; a new figure in it forces revise. At most "
+        "one per turn.", {"finding": {"type": "string", "minLength": 1, "maxLength": 80, "description": "finding_id"},
+                          "decision": {"type": "string", "enum": ["accept", "dismiss", "revise"]},
+                          "note": {"type": "string", "maxLength": 500}}, ["finding", "decision"]),
+    _fn("propose_accept_verified_errors", "Review stage: PROPOSE accept for every open finding the Bookkeeper's "
+        "Verifier agreed is an error (code picks them; no arguments). needs_owner findings are left for the owner."),
 ]
 SPECS = {t["function"]["name"]: t["function"] for t in TOOLS}
+ALWAYS = ("bookkeeper_status", "get_cash_position", "list_bills_due", "review_status")
+READING = ("get_findings", "lookup")
+FORECASTS = ("forecast_base", "forecast_scenario", "get_menu", "list_upcoming_changes")
+STAGE_TOOLS = {"Audit": frozenset(ALWAYS),
+               "Review": frozenset(ALWAYS + READING + ("propose_decision", "propose_accept_verified_errors")),
+               "Commit": frozenset(ALWAYS + READING),
+               "Forecast": frozenset(ALWAYS + READING + FORECASTS),
+               "Suggest": frozenset(ALWAYS + READING + FORECASTS + ("scan_market", "propose_fix", "preview_suggestion"))}
+OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion", "propose_decision", "propose_accept_verified_errors"))
 
 
 class Refusal(ValueError):
@@ -174,6 +201,39 @@ def _check(schema: dict, value, where: str):
     return value
 
 
+# ---------------------------------------------------------------- stages
+def stage(session):
+    from . import stages
+    return stages.current(session)
+
+
+def allowed(session, name: str) -> bool:
+    """May `name` run in the current stage?"""
+    return name in STAGE_TOOLS.get(stage(session).stage, ())
+
+
+def tools_for(session, owner: bool = True) -> list[dict]:
+    """The tools an LLM is offered right now: this stage's, minus the owner-only ones for a non-owner."""
+    names = STAGE_TOOLS.get(stage(session).stage, frozenset())
+    return [t for t in TOOLS if t["function"]["name"] in names and (owner or t["function"]["name"] not in OWNER_ONLY)]
+
+
+def stage_line(session) -> str:
+    from . import stages
+    return stages.line(session)
+
+
+def _gate(session, name: str):
+    view = stage(session)
+    if name not in STAGE_TOOLS.get(view.stage, ()):
+        raise Refusal(f"{name} is not available in the {view.stage} stage: {view.why}")
+
+
+def _locked():
+    from . import review, stages
+    return (stages.StageLocked, review.ReviewError)
+
+
 # ---------------------------------------------------------------- the entry points
 _STOP = contextvars.ContextVar("orchestrator_tools_stop", default=None)
 
@@ -207,12 +267,13 @@ def call(session: Session, name: str, args: dict) -> dict:
             raise Refusal(f"unknown tool; tools: {', '.join(SPECS)}")
         if _expired(_STOP.get()):
             raise Refusal("the turn ran out of time: nothing was run")
+        _gate(session, name)
         clean = _check(spec["parameters"], {} if args is None else args, "args")
         with env.LOCK:
             env.bind(session.root, session.tag)
             result = displayed(HANDLERS[name](session, **{k: v for k, v in clean.items() if v is not None}))
         json.dumps(result)
-    except Refusal as exc:
+    except (Refusal, *_locked()) as exc:
         result = {"error": str(exc)}
     except Exception as exc:                              # report to the caller (an LLM loop) instead of crashing it
         LOG.warning("tool %s failed", name, exc_info=True)  # the message may carry paths or input: log, don't return
@@ -401,17 +462,6 @@ def _findings(session: Session):
     return None, bad
 
 
-def _adjustments(session: Session) -> tuple[list, str]:
-    got, _ = _findings(session)
-    if got is None:
-        return [], "no Bookkeeper report yet: history used as the bank shows it"
-    path, findings, _, _, checks, passed, ver = got
-    n_pass = sum(c.status == "pass" for c in checks)
-    return passed, (f"{len(passed)} cautious adjustment(s) from {path.name} ({ver['label']}; {n_pass} of "
-                    f"{len(findings)} finding(s) decided by the owner, the rest await the owner's review and count "
-                    "only if cautious)")
-
-
 def _round_dollar(cents: int) -> int:
     return (int(cents) + 50) // 100 * 100
 
@@ -567,6 +617,7 @@ def adopt_market_report(session: Session, filename, request_id: str | None = Non
     from market_scout.contracts import MarketReport
 
     try:
+        _gate(session, "scan_market")
         name = market_name(filename)
         if name is None:
             raise Refusal("the scout named a report file outside data/market_reports")
@@ -610,9 +661,46 @@ def list_upcoming_changes(session: Session, on: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- forecasts
-def _settings(session: Session):
+def _inputs(session: Session):
+    """(view, adjustments, note, as_of) for a forecast: the stage re-checked here (a second layer behind call()),
+    adjustments ALWAYS an explicit list from the owner's committed decisions, as_of the review's."""
+    from . import review, stages
+
+    view = stages.require(session, stages.FORECAST)
+    adjustments, note = review.adjustments(session, view)
+    as_of = date.fromisoformat(view.as_of) if view.as_of else session.as_of
+    if view.as_of and session.as_of and session.as_of != as_of:
+        raise Refusal(f"--as-of conflicts with the review's as_of {view.as_of}: forecasts use the review's date")
+    return view, adjustments, note, as_of
+
+
+def _unchanged(session: Session, view):
+    """Recompute the data fingerprint fully; Refusal if it moved since the audit (the forecast is not used)."""
+    from . import stages
+
+    if view.review_id is None or view.fingerprint is None:
+        return
+    fp = stages.fingerprint(session.root, session.tag, view.as_of, fresh=True)
+    if any(fp.get(k) != view.fingerprint.get(k) for k in stages.FP_PARTS):
+        raise Refusal("the data changed since the audit: the forecast was not used; the owner runs "
+                      "`orchestrator bookkeeper-update`")
+
+
+def _run(session: Session, scenario, adjustments, view, as_of):
+    """run_forecast with an explicit list (never None: None would let the forecaster load a report itself), the
+    review's as_of in both places, never report_id; dropped if the data moved during the run."""
     import contracts as K
-    return K.ForecastSettings(as_of=session.as_of)
+    import forecaster as F
+
+    if not isinstance(adjustments, list):
+        raise Refusal("no adjustments list: refusing to let the forecaster read a report by itself")
+    _unchanged(session, view)
+    fr = F.run_forecast(scenario, adjustments=adjustments, settings=K.ForecastSettings(as_of=as_of), as_of=as_of,
+                        save=True)
+    if as_of is not None and fr.as_of != as_of:
+        raise Refusal("the forecaster used another as_of than the review's: the result was not used")
+    _unchanged(session, view)
+    return fr
 
 
 def _detail(forecast_id: str) -> dict:
@@ -635,18 +723,24 @@ def _chart(session: Session, path) -> str | None:
 
 
 def _base(session: Session) -> dict:
-    """The base forecast for this session's settings and adjustments, run once per session (deterministic seed)."""
-    import forecaster as F
+    """The base forecast for the committed review (its decisions and as_of), run once per session (deterministic
+    seed). Recording it opens the Suggest stage."""
+    from . import review
 
-    adjustments, note = _adjustments(session)
-    key = ("base", str(session.as_of), json.dumps([a.model_dump(mode="json") for a in adjustments], sort_keys=True))
+    view, adjustments, note, as_of = _inputs(session)
+    key = ("base", str(as_of), view.digest, json.dumps([a.model_dump(mode="json") for a in adjustments],
+                                                       sort_keys=True))
     if key not in session.cache:
         may_write(session)                                 # run_forecast(save=True) writes data/forecasts/<id>.json
-        fr = F.run_forecast(None, adjustments=adjustments, settings=_settings(session), save=True)
+        fr = _run(session, None, adjustments, view, as_of)
+        if view.review_id is not None and view.digest:
+            review.record_base_forecast(session, view, fr.forecast_id)
         out = _view(fr)
         out["chart_path"] = _chart(session, out["chart_path"])
         out["adjustments_used"] = [{"finding_id": a.finding_id, "kind": a.kind} for a in adjustments]
         out["adjustments_note"] = note
+        out["provenance"] = {"review_id": view.review_id, "decisions": view.digest[:16] if view.digest else None,
+                             "as_of": view.as_of, "report": view.report}
         out["report_note"] = _detail(fr.forecast_id).get("report_note")
         session.cache[key] = out
     return session.cache[key]
@@ -661,7 +755,6 @@ def forecast_base(session: Session) -> dict:
 
 def forecast_scenario(session: Session, scenario: dict) -> dict:
     import contracts as K
-    import forecaster as F
 
     try:
         sc = K.Scenario.model_validate(scenario)
@@ -673,12 +766,14 @@ def forecast_scenario(session: Session, scenario: dict) -> dict:
     if sc == K.Scenario(name=sc.name):
         raise Refusal("the scenario changes nothing; for the base case use forecast_base")
     base = _base(session)
-    adjustments, _ = _adjustments(session)
+    view, adjustments, _, as_of = _inputs(session)
     key = ("scenario", base["forecast_id"], sc.model_dump_json())
     if key not in session.cache:
         may_write(session)
         try:
-            fr = F.run_forecast(sc, adjustments=adjustments, settings=_settings(session), save=True)
+            fr = _run(session, sc, adjustments, view, as_of)
+        except Refusal:
+            raise
         except ValueError:                                 # unknown dish or supplier, date outside the window
             raise Refusal("scenario: the forecaster refused it (a dish or supplier it doesn't know, or a date "
                           "outside the forecast window)") from None
@@ -850,9 +945,28 @@ def preview_suggestion(session: Session, path: str) -> dict:
     return {"path": rel(session, p), "suggestion": s, **_dry_run(session, s), "approve_command": _command(session, p)}
 
 
+# ---------------------------------------------------------------- the owner's review (proposals only)
+def review_status(session: Session) -> dict:
+    from . import review
+    return review.status(session)
+
+
+def propose_decision(session: Session, finding: str, decision: str, note: str | None = None) -> dict:
+    from . import review
+    return review.propose(session, finding, decision, note, by="llm")
+
+
+def propose_accept_verified_errors(session: Session) -> dict:
+    from . import review
+    return review.accept_verified_errors(session)
+
+
 HANDLERS = {"get_cash_position": get_cash_position, "list_bills_due": list_bills_due, "lookup": lookup,
             "get_findings": get_findings, "scan_market": scan_market, "get_menu": get_menu,
             "list_upcoming_changes": list_upcoming_changes, "forecast_base": forecast_base,
             "forecast_scenario": forecast_scenario, "propose_fix": propose_fix,
-            "preview_suggestion": preview_suggestion, "bookkeeper_status": bookkeeper_status}
+            "preview_suggestion": preview_suggestion, "bookkeeper_status": bookkeeper_status,
+            "review_status": review_status, "propose_decision": propose_decision,
+            "propose_accept_verified_errors": propose_accept_verified_errors}
+assert set().union(*STAGE_TOOLS.values()) == set(SPECS)
 assert HANDLERS.keys() == SPECS.keys()

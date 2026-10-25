@@ -321,7 +321,7 @@ def setup(root, as_of=None, timeout=SETUP_TIMEOUT, force=False, tag="boh-1loc", 
              "by its Verifier (two investigations, ~40 ASI calls plus revisions; can take most of an hour)")
     path, verified = run_verified(root, as_of=as_of, timeout=timeout, tag=tag, progress=progress, **kw)
     progress(f"Bookkeeper: wrote data/reports/{path.name} ({_said(verified)}); ingesting")
-    merged = S.ingest(root, path, baseline=True)
+    merged = S.ingest(root, path, baseline=True, tag=tag)
     return {"status": "done", "seconds": round(time.monotonic() - started, 1), "report": path.name,
             "reply_verified": verified, **merged}
 
@@ -363,7 +363,7 @@ def update(root, timeout=UPDATE_TIMEOUT, tag="boh-1loc", allow_full=True, progre
         path, verified = run_verified(root, as_of=plan["as_of"], timeout=timeout, tag=tag, progress=progress,
                                       environ=environ, **kw)
     progress(f"Bookkeeper: wrote data/reports/{path.name} ({_said(verified)}); ingesting")
-    merged = S.ingest(root, path)
+    merged = S.ingest(root, path, tag=tag)
     return {"status": "updated", "seconds": round(time.monotonic() - started, 1), "report": path.name,
             "reply_verified": verified, **merged}
 
@@ -381,7 +381,7 @@ async def asetup(root, agent, timeout=SETUP_TIMEOUT, force=False, tag="boh-1loc"
     started = time.monotonic()
     payload = A.build_request(latest, request_id=new_request_id(latest), tag=tag, environ=environ)
     path, verified = await arun_agent(root, agent, payload, timeout, sender)
-    merged = await asyncio.to_thread(S.ingest, root, path, True)
+    merged = await asyncio.to_thread(S.ingest, root, path, True, tag)
     return {"status": "done", "seconds": round(time.monotonic() - started, 1), "report": path.name,
             "reply_verified": verified, "via": "bookkeeper agent", **merged}
 
@@ -396,7 +396,7 @@ async def aupdate(root, agent, timeout=UPDATE_TIMEOUT, tag="boh-1loc", allow_ful
     payload = A.build_request(plan["as_of"], plan.get("since"), plan.get("prior"),
                               request_id=new_request_id(plan["as_of"]), tag=tag, environ=environ)
     path, verified = await arun_agent(root, agent, payload, timeout, sender)
-    merged = await asyncio.to_thread(S.ingest, root, path)
+    merged = await asyncio.to_thread(S.ingest, root, path, None, tag)
     return {"status": "updated", "seconds": round(time.monotonic() - started, 1), "report": path.name,
             "reply_verified": verified, "via": "bookkeeper agent", **merged}
 
@@ -462,7 +462,7 @@ async def _agent_update(root, agent, timeout, tag, environ) -> dict:
     payload = A.build_request(plan["as_of"], plan["since"], plan["prior"], request_id=new_request_id(plan["as_of"]),
                               tag=tag, environ=environ)
     path, _ = await arun_agent(root, agent, payload, timeout, getattr(agent, "sender", SENDER))
-    merged = await asyncio.to_thread(S.ingest, root, path)
+    merged = await asyncio.to_thread(S.ingest, root, path, None, tag)
     return {"status": "updated", "report": path.name, **merged}
 
 

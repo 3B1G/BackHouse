@@ -31,7 +31,7 @@ from decimal import Decimal, InvalidOperation
 
 TOOL_NAMES = frozenset(("get_cash_position", "list_bills_due", "lookup", "get_findings", "scan_market", "get_menu",
                         "list_upcoming_changes", "forecast_base", "forecast_scenario", "propose_fix",
-                        "preview_suggestion"))
+                        "preview_suggestion", "review_status", "bookkeeper_status"))
 ECHO_KEYS = frozenset(("args", "scenario", "request", "payload"))          # caller input echoed back: never support
 TEXT_KEYS = frozenset(("name", "label", "title", "question", "memo", "note", "notes", "explanation", "description",
                        "nickname", "payee", "doc", "why", "error", "target", "item", "our_item", "dish", "based_on",

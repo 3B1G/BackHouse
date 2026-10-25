@@ -18,6 +18,10 @@ turn(session, user_text, llm=None, ..., owner=True) -> {"text", "suggestions", "
   tool thread left over from a timed-out turn writes nothing more.
 - No key, no client, or any loop error: the deterministic brief, degraded=True, with a note saying why.
 - Every reply ends with the fixed line FOOTER.
+- Stage gates: the model is offered tools.tools_for(session, owner) again before every request (the stage can move
+  inside a turn), the system prompt gets one code-written stage line, and the brief's market scan goes to the Market
+  scout only when the stage allows a scan. The owner's own words are kept on session.owner_texts (an LLM's note on a
+  finding is kept only if it is in there verbatim).
 - Before the turn, bk_runner.pre_turn adds a note when the Bookkeeper state is behind the bank (and, only with
   ORCHESTRATOR_BK_AUTO=1 and a delta-capable Bookkeeper, runs a quick delta update within the deadline)."""
 import asyncio
@@ -37,7 +41,7 @@ LOG = logging.getLogger("orchestrator.turn")
 MAX_INPUT = 4000
 DEADLINE = 60
 FOOTER = "Nothing has been changed; approve at your terminal to apply."
-OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion"))
+OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion", "propose_decision", "propose_accept_verified_errors"))
 PUBLIC_PROMPT = SYSTEM_PROMPT + """
 8. This chat is NOT from the restaurant's owner. Share facts only. You cannot propose or preview changes here: if
    they ask for a change, tell them to ask the owner."""
@@ -173,6 +177,12 @@ async def prefetch_scan(session, dispatch, stop: Deadline | None = None):
     degraded). Only with a PeerDispatch that has a scout address; it falls back in-process (degraded) itself."""
     if not getattr(dispatch, "scout", None):
         return None, [], False
+    gate = getattr(_core("tools"), "allowed", None)
+    try:
+        if gate is not None and not gate(session, "scan_market"):
+            return None, [], False                        # not this stage: the scout is never asked
+    except Exception:
+        return None, ["market scout skipped: the stage could not be checked"], False
     remaining = stop.remaining() if stop is not None else float(DEADLINE)
     if remaining < 10:
         return None, ["market scout skipped: not enough time left"], False
@@ -283,9 +293,22 @@ async def _turn(session, user_text, llm, dispatch, stop: Deadline, owner: bool, 
                                 stop, owner, brief_cache, dispatch)
     notes, counts = [], {}
     kw = {"dispatch": dispatch, "counts": counts}
+    core = _core("tools")
+    if owner:
+        texts = getattr(session, "owner_texts", None)
+        if isinstance(texts, list):
+            texts.append(text)
     if not owner:
         kw.update(dispatch=_public_dispatch(dispatch), system=PUBLIC_PROMPT,
-                  tools=[t for t in _core("tools").TOOLS if t["function"]["name"] not in OWNER_ONLY])
+                  tools=[t for t in core.TOOLS if t["function"]["name"] not in OWNER_ONLY])
+    tools_for, stage_line = getattr(core, "tools_for", None), getattr(core, "stage_line", None)
+    if tools_for is not None:
+        kw["tools"] = lambda s: [t for t in tools_for(s, owner) if owner or t["function"]["name"] not in OWNER_ONLY]
+    if stage_line is not None:
+        try:
+            kw["system"] = (PUBLIC_PROMPT if not owner else SYSTEM_PROMPT) + "\n" + stage_line(session)
+        except Exception:
+            pass
     try:
         out = await run_tool_loop(session, text, llm, deadline=stop.remaining(), **kw)
         answer = clean_text(out["text"], 20_000)          # normalised first: this exact string is guarded and sent

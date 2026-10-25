@@ -56,14 +56,14 @@
       "path": "/api/market",
       "request": null,
       "response": "MarketResponse",
-      "description": "The latest saved market positions (no new scan)."
+      "description": "The latest saved market positions (no new scan). ok=false before the Suggest stage."
     },
     {
       "method": "POST",
       "path": "/api/forecast",
       "request": "ForecastRequest",
       "response": "ForecastResponse",
-      "description": "A what-if forecast (contracts.Scenario): base and scenario run-out dates, vs_base, the monthly cash effect."
+      "description": "A what-if forecast (contracts.Scenario): base and scenario run-out dates, vs_base, the monthly cash effect. ok=false before the Forecast stage."
     },
     {
       "method": "GET",
@@ -78,6 +78,20 @@
       "request": null,
       "response": "BillsResponse",
       "description": "Pending bills from the Nessie sync, earliest first, with the total."
+    },
+    {
+      "method": "GET",
+      "path": "/api/review",
+      "request": null,
+      "response": "ReviewResponse",
+      "description": "The stage (Audit, Review, Commit, Forecast, Suggest) and why, every open finding with its proposed decision, the batch of verified errors, and the owner's next step."
+    },
+    {
+      "method": "POST",
+      "path": "/api/review/decide",
+      "request": "DecideRequest",
+      "response": "DecideResponse",
+      "description": "Record the owner's PROPOSED decision on one finding (or accept every verified error). Never commits: the owner signs the review in CH at the terminal."
     }
   ],
   "models": {
@@ -93,6 +107,9 @@
         "error": {
           "title": "Error",
           "type": "string"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageInfo"
         },
         "version": {
           "title": "Version",
@@ -134,6 +151,66 @@
         "time"
       ],
       "definitions": {
+        "StageInfo": {
+          "title": "StageInfo",
+          "type": "object",
+          "properties": {
+            "stage": {
+              "title": "Stage",
+              "type": "string"
+            },
+            "why": {
+              "title": "Why",
+              "default": "",
+              "type": "string"
+            },
+            "review_id": {
+              "title": "Review Id",
+              "type": "string"
+            },
+            "as_of": {
+              "title": "As Of",
+              "type": "string"
+            },
+            "report": {
+              "title": "Report",
+              "type": "string"
+            },
+            "open_findings": {
+              "title": "Open Findings",
+              "default": 0,
+              "type": "integer"
+            },
+            "decided": {
+              "title": "Decided",
+              "default": 0,
+              "type": "integer"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "approve_command": {
+              "title": "Approve Command",
+              "type": "string"
+            },
+            "suggestion_file": {
+              "title": "Suggestion File",
+              "type": "string"
+            },
+            "order": {
+              "title": "Order",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "stage"
+          ]
+        },
         "AgentStatus": {
           "title": "AgentStatus",
           "type": "object",
@@ -216,6 +293,9 @@
           "title": "Error",
           "type": "string"
         },
+        "stage": {
+          "$ref": "#/definitions/StageInfo"
+        },
         "text": {
           "title": "Text",
           "default": "",
@@ -264,6 +344,66 @@
         }
       },
       "definitions": {
+        "StageInfo": {
+          "title": "StageInfo",
+          "type": "object",
+          "properties": {
+            "stage": {
+              "title": "Stage",
+              "type": "string"
+            },
+            "why": {
+              "title": "Why",
+              "default": "",
+              "type": "string"
+            },
+            "review_id": {
+              "title": "Review Id",
+              "type": "string"
+            },
+            "as_of": {
+              "title": "As Of",
+              "type": "string"
+            },
+            "report": {
+              "title": "Report",
+              "type": "string"
+            },
+            "open_findings": {
+              "title": "Open Findings",
+              "default": 0,
+              "type": "integer"
+            },
+            "decided": {
+              "title": "Decided",
+              "default": 0,
+              "type": "integer"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "approve_command": {
+              "title": "Approve Command",
+              "type": "string"
+            },
+            "suggestion_file": {
+              "title": "Suggestion File",
+              "type": "string"
+            },
+            "order": {
+              "title": "Order",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "stage"
+          ]
+        },
         "Money": {
           "title": "Money",
           "type": "object",
@@ -1757,6 +1897,279 @@
           },
           "required": [
             "available"
+          ]
+        }
+      }
+    },
+    "ReviewResponse": {
+      "title": "ReviewResponse",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "title": "Ok",
+          "default": true,
+          "type": "boolean"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "stage": {
+          "$ref": "#/definitions/StageInfo"
+        },
+        "committed": {
+          "title": "Committed",
+          "default": false,
+          "type": "boolean"
+        },
+        "findings": {
+          "title": "Findings",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ReviewFinding"
+          }
+        },
+        "batch": {
+          "title": "Batch",
+          "default": {},
+          "type": "object"
+        },
+        "note": {
+          "title": "Note",
+          "default": "Decisions here are proposals. The owner commits the review with `orchestrator review prepare` and then the approve command at their own terminal (CH asks for the owner passphrase).",
+          "type": "string"
+        }
+      },
+      "definitions": {
+        "StageInfo": {
+          "title": "StageInfo",
+          "type": "object",
+          "properties": {
+            "stage": {
+              "title": "Stage",
+              "type": "string"
+            },
+            "why": {
+              "title": "Why",
+              "default": "",
+              "type": "string"
+            },
+            "review_id": {
+              "title": "Review Id",
+              "type": "string"
+            },
+            "as_of": {
+              "title": "As Of",
+              "type": "string"
+            },
+            "report": {
+              "title": "Report",
+              "type": "string"
+            },
+            "open_findings": {
+              "title": "Open Findings",
+              "default": 0,
+              "type": "integer"
+            },
+            "decided": {
+              "title": "Decided",
+              "default": 0,
+              "type": "integer"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "approve_command": {
+              "title": "Approve Command",
+              "type": "string"
+            },
+            "suggestion_file": {
+              "title": "Suggestion File",
+              "type": "string"
+            },
+            "order": {
+              "title": "Order",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "stage"
+          ]
+        },
+        "Money": {
+          "title": "Money",
+          "type": "object",
+          "properties": {
+            "cents": {
+              "title": "Cents",
+              "type": "integer"
+            },
+            "usd": {
+              "title": "Usd",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cents",
+            "usd"
+          ]
+        },
+        "ReviewFinding": {
+          "title": "ReviewFinding",
+          "type": "object",
+          "properties": {
+            "finding_id": {
+              "title": "Finding Id",
+              "type": "string"
+            },
+            "verdict": {
+              "title": "Verdict",
+              "type": "string"
+            },
+            "root_cause": {
+              "title": "Root Cause",
+              "type": "string"
+            },
+            "counterparty": {
+              "title": "Counterparty",
+              "type": "string"
+            },
+            "impact": {
+              "$ref": "#/definitions/Money"
+            },
+            "verifier": {
+              "title": "Verifier",
+              "type": "string"
+            },
+            "proposal": {
+              "title": "Proposal",
+              "type": "object"
+            }
+          },
+          "required": [
+            "finding_id"
+          ]
+        }
+      }
+    },
+    "DecideRequest": {
+      "title": "DecideRequest",
+      "type": "object",
+      "properties": {
+        "finding": {
+          "title": "Finding",
+          "type": "string"
+        },
+        "decision": {
+          "title": "Decision",
+          "type": "string"
+        },
+        "note": {
+          "title": "Note",
+          "type": "string"
+        },
+        "accept_verified_errors": {
+          "title": "Accept Verified Errors",
+          "default": false,
+          "type": "boolean"
+        }
+      }
+    },
+    "DecideResponse": {
+      "title": "DecideResponse",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "title": "Ok",
+          "default": true,
+          "type": "boolean"
+        },
+        "error": {
+          "title": "Error",
+          "type": "string"
+        },
+        "proposed": {
+          "title": "Proposed",
+          "default": [],
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "stage": {
+          "$ref": "#/definitions/StageInfo"
+        },
+        "committed": {
+          "title": "Committed",
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "definitions": {
+        "StageInfo": {
+          "title": "StageInfo",
+          "type": "object",
+          "properties": {
+            "stage": {
+              "title": "Stage",
+              "type": "string"
+            },
+            "why": {
+              "title": "Why",
+              "default": "",
+              "type": "string"
+            },
+            "review_id": {
+              "title": "Review Id",
+              "type": "string"
+            },
+            "as_of": {
+              "title": "As Of",
+              "type": "string"
+            },
+            "report": {
+              "title": "Report",
+              "type": "string"
+            },
+            "open_findings": {
+              "title": "Open Findings",
+              "default": 0,
+              "type": "integer"
+            },
+            "decided": {
+              "title": "Decided",
+              "default": 0,
+              "type": "integer"
+            },
+            "digest": {
+              "title": "Digest",
+              "type": "string"
+            },
+            "approve_command": {
+              "title": "Approve Command",
+              "type": "string"
+            },
+            "suggestion_file": {
+              "title": "Suggestion File",
+              "type": "string"
+            },
+            "order": {
+              "title": "Order",
+              "default": [],
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "stage"
           ]
         }
       }

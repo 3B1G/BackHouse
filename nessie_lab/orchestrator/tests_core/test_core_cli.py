@@ -10,7 +10,7 @@ def test_tools_lists_every_tool(capsys):
     assert "propose_fix(dish, new_price_cents?, action?)" in out and "scan_market(items?, service?)" in out
 
 
-def test_call_with_json_text_and_with_a_file(root, capsys, tmp_path):
+def test_call_with_json_text_and_with_a_file(root, capsys, tmp_path, open_gates):
     assert cli.main(["--root", str(root), "call", "get_menu", '{"on": "2026-10-24"}']) == 0
     assert json.loads(capsys.readouterr().out)["on"] == "2026-10-24"
     args = tmp_path / "args.json"

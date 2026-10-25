@@ -112,7 +112,7 @@ def test_the_real_root_approve_command_is_root_relative(session, monkeypatch):
 
 
 # ---------------------------------------------------------------- 5. runaway proposals
-def test_brief_twice_writes_no_new_suggestion_files(root):
+def test_brief_twice_writes_no_new_suggestion_files(root, open_gates):
     first = brief(Session(root))
     files = _suggestions(Session(root))
     assert len(files) == len(first["suggestions"]) == 2

@@ -15,6 +15,13 @@ loopback address, a loopback client and Host, the bearer token from data/orchest
     POST /api/forecast {scenario}    base and scenario results with vs_base
     GET  /api/menu                   the effective menu with food cost %
     GET  /api/bills                  pending bills, earliest first
+    GET  /api/review                 the stage, every open finding with its proposed decision, the owner's next step
+    POST /api/review/decide {finding, decision, note?} | {accept_verified_errors: true}
+                                     records the owner's PROPOSED decision (proposed_by "owner_ui"); never commits
+
+Stage gates (stages.py): /api/health and /api/brief carry `stage`; the brief shows only what the stage allows;
+/api/forecast and /api/market answer ok=false outside their stage (Forecast / Suggest). The review is committed only
+by the owner's passphrase-signed `changes approve` of the review suggestion, at the terminal: no route records it.
 
 There is NO approve or apply route. A suggestion carries `approve_command` (what the owner runs at their own
 terminal; CH asks for the passphrase) and `owner_action_required: true`. Money is {cents, usd} (usd from fmt.usd,
@@ -67,9 +74,24 @@ class Coverage(Model):
     why: str | None = None
 
 
+class StageInfo(Model):
+    stage: str                                        # Audit | Review | Commit | Forecast | Suggest
+    why: str = ""
+    review_id: str | None = None
+    as_of: str | None = None
+    report: str | None = None
+    open_findings: int = 0
+    decided: int = 0
+    digest: str | None = None
+    approve_command: str | None = None                # Commit stage: what the owner runs (no --apply)
+    suggestion_file: str | None = None
+    order: list[str] = []
+
+
 class HealthResponse(Model):
     ok: bool = True
     error: str | None = None
+    stage: StageInfo | None = None
     version: str
     mode: str                                         # "local" | "mailbox"
     offline: bool
@@ -222,6 +244,7 @@ class SuggestionItem(Model):
 class BriefResponse(Model):
     ok: bool = True
     error: str | None = None
+    stage: StageInfo | None = None
     text: str = ""
     cash: Cash | None = None
     runway: Runway | None = None
@@ -345,6 +368,42 @@ class BillsResponse(Model):
     ok: bool = True
     error: str | None = None
     bills: Bills | None = None
+
+
+class ReviewFinding(Model):
+    finding_id: str
+    verdict: str | None = None
+    root_cause: str | None = None
+    counterparty: str | None = None
+    impact: Money | None = None
+    verifier: str | None = None
+    proposal: dict | None = None                      # {decision, note, forced, proposed_by, decided_at}
+
+
+class ReviewResponse(Model):
+    ok: bool = True
+    error: str | None = None
+    stage: StageInfo | None = None
+    committed: bool = False
+    findings: list[ReviewFinding] = []
+    batch: dict = {}
+    note: str = ("Decisions here are proposals. The owner commits the review with `orchestrator review prepare` and "
+                 "then the approve command at their own terminal (CH asks for the owner passphrase).")
+
+
+class DecideRequest(Model):
+    finding: str | None = None
+    decision: str | None = None                       # accept | dismiss | revise
+    note: str | None = None
+    accept_verified_errors: bool = False
+
+
+class DecideResponse(Model):
+    ok: bool = True
+    error: str | None = None
+    proposed: list[dict] = []
+    stage: StageInfo | None = None
+    committed: bool = False
 
 
 # ---------------------------------------------------------------- helpers
@@ -494,6 +553,8 @@ def list_suggestions(session, preview: bool = True, limit: int = SUGGESTION_LIMI
             continue
         if s.suggestion_id in applied:
             continue
+        if s.action == "other" and s.suggestion_id.startswith("review-"):
+            continue                                       # the owner's review: GET /api/review, never applied
         item = suggestion_item(session, p, s, mtime, today)
         if preview:
             r = tools.call(session, "preview_suggestion", {"path": item["path"]})
@@ -609,6 +670,19 @@ def coverage(session) -> dict:
             "verification": view.get("last_run_verification")}
 
 
+def stage_info(session) -> dict:
+    from . import stages
+    return stages.current(session).public()
+
+
+def review_view(r: dict) -> dict:
+    return {"stage": r.get("stage"), "committed": bool(r.get("committed")), "batch": r.get("batch") or {},
+            "findings": [{"finding_id": f["finding_id"], "verdict": f.get("verdict"), "root_cause": f.get("root_cause"),
+                          "counterparty": f.get("counterparty"), "impact": money(f.get("impact_cents")),
+                          "verifier": f.get("verifier"), "proposal": f.get("proposal")}
+                         for f in r.get("findings") or []]}
+
+
 def _busy(service):
     sem = service.__dict__.get("_api_slots")
     if sem is None:
@@ -630,7 +704,11 @@ def build_handlers(service) -> dict:
             cov = {"available": False, "why": _err(exc)}
         agents = {"market_scout": await agent_status(service, service.scout),
                   "bookkeeper": await agent_status(service, service.bookkeeper)}
-        return HealthResponse(version=__version__, mode="mailbox" if service.mailbox else "local",
+        try:
+            stage = await _thread(lambda: stage_info(session), 15)
+        except Exception:
+            stage = None
+        return HealthResponse(stage=stage, version=__version__, mode="mailbox" if service.mailbox else "local",
                               offline=bool(service.offline), delegation=service.delegating, agents=agents,
                               bookkeeper=cov, time=datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
@@ -654,7 +732,7 @@ def build_handlers(service) -> dict:
             finally:
                 session.stop.cancel()
             f = out["facts"]
-            return BriefResponse(text=out["text"], cash=cash_view(f.get("cash")), runway=runway_view(f.get("forecast")),
+            return BriefResponse(stage=f.get("stage") or None, text=out["text"], cash=cash_view(f.get("cash")), runway=runway_view(f.get("forecast")),
                                  bills=bills_view(f.get("bills")), findings=findings_view(f.get("findings")),
                                  market=market_view(f.get("market")), fixes=fixes, proposes=False,
                                  degraded=degraded, notes=notes + [OWNER_NOTE])
@@ -730,6 +808,14 @@ def build_handlers(service) -> dict:
 
     async def market(ctx: Context) -> MarketResponse:
         session = _session(service)
+        try:
+            open_ = await _thread(lambda: tools.allowed(session, "scan_market"), 15)
+        except Exception as exc:
+            return MarketResponse(ok=False, error=f"market {_err(exc)}")
+        if not open_:
+            st = tools.stage(session)
+            return MarketResponse(ok=False, error=f"the market opens in the Suggest stage (this is the {st.stage} "
+                                                  f"stage: {st.why})")
 
         def latest():
             from market_scout.contracts import MarketReport
@@ -809,10 +895,44 @@ def build_handlers(service) -> dict:
             return BillsResponse(ok=False, error=r["error"])
         return BillsResponse(bills=bills_view(r))
 
+    async def review_get(ctx: Context) -> ReviewResponse:
+        session = _session(service)
+        try:
+            r = await _thread(lambda: tools.call(session, "review_status", {}), 30)
+        except Exception as exc:
+            return ReviewResponse(ok=False, error=f"review {_err(exc)}")
+        if "error" in r:
+            return ReviewResponse(ok=False, error=r["error"])
+        return ReviewResponse(**review_view(r))
+
+    async def review_decide(ctx: Context, request: DecideRequest) -> DecideResponse:
+        """The owner's click in the UI: a PROPOSED decision (owner_ui). Never prepares, never commits."""
+        from . import review
+        from .stages import StageLocked
+
+        session = _session(service)
+
+        def run():
+            if request.accept_verified_errors:
+                return review.accept_verified_errors(session, by="owner_ui")
+            if not request.finding or request.decision not in review.DECISIONS:
+                raise review.ReviewError("give finding and decision (accept, dismiss or revise), or "
+                                         "accept_verified_errors: true")
+            return review.propose(session, request.finding[:80], request.decision,
+                                  (request.note or "")[:500] or None, by="owner_ui")
+        try:
+            r = await _thread(run, 30)
+        except (review.ReviewError, StageLocked) as exc:
+            return DecideResponse(ok=False, error=str(exc), stage=stage_info(session))
+        except Exception as exc:
+            return DecideResponse(ok=False, error=f"decide {_err(exc)}")
+        return DecideResponse(proposed=r.get("proposed") or [], stage=stage_info(session), committed=False)
+
     return {("GET", "/api/health"): health, ("GET", "/api/brief"): brief, ("POST", "/api/ask"): ask,
             ("GET", "/api/status"): status, ("GET", "/api/suggestions"): suggestions,
             ("POST", "/api/suggestions/preview"): preview, ("GET", "/api/market"): market,
-            ("POST", "/api/forecast"): forecast, ("GET", "/api/menu"): menu, ("GET", "/api/bills"): bills}
+            ("POST", "/api/forecast"): forecast, ("GET", "/api/menu"): menu, ("GET", "/api/bills"): bills,
+            ("GET", "/api/review"): review_get, ("POST", "/api/review/decide"): review_decide}
 
 
 def _pct(share):
@@ -834,12 +954,17 @@ ENDPOINTS = [
      "action, target, old/new price, effect, created time and approve_command (owner_action_required: true)."),
     ("POST", "/api/suggestions/preview", PreviewRequest, PreviewResponse, "CH's dry-run plan and question line for "
      "one suggestion. Read-only."),
-    ("GET", "/api/market", None, MarketResponse, "The latest saved market positions (no new scan)."),
+    ("GET", "/api/market", None, MarketResponse, "The latest saved market positions (no new scan). ok=false before "
+     "the Suggest stage."),
     ("POST", "/api/forecast", ForecastRequest, ForecastResponse, "A what-if forecast (contracts.Scenario): base and "
-     "scenario run-out dates, vs_base, the monthly cash effect."),
+     "scenario run-out dates, vs_base, the monthly cash effect. ok=false before the Forecast stage."),
     ("GET", "/api/menu", None, MenuResponse, "The dine-in dinner menu in force, each dish's food cost, and the "
      "menu's overall food cost %."),
     ("GET", "/api/bills", None, BillsResponse, "Pending bills from the Nessie sync, earliest first, with the total."),
+    ("GET", "/api/review", None, ReviewResponse, "The stage (Audit, Review, Commit, Forecast, Suggest) and why, every "
+     "open finding with its proposed decision, the batch of verified errors, and the owner's next step."),
+    ("POST", "/api/review/decide", DecideRequest, DecideResponse, "Record the owner's PROPOSED decision on one "
+     "finding (or accept every verified error). Never commits: the owner signs the review in CH at the terminal."),
 ]
 FORBIDDEN_WORDS = ("approve", "apply", "revert", "unlock")        # no route path may name one
 

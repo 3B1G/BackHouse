@@ -121,7 +121,7 @@ async def test_api_is_not_registered_off_loopback(root, monkeypatch):
 
 
 # ---------------------------------------------------------------- shapes, and nothing approves
-async def test_every_endpoint_returns_its_model_and_never_approves(served, root, tripwire):
+async def test_every_endpoint_returns_its_model_and_never_approves(served, root, tripwire, open_gates):
     async with client(served) as c:
         h = auth(served, Origin=ALLOWED)
         got = {}
@@ -171,7 +171,7 @@ async def test_every_endpoint_returns_its_model_and_never_approves(served, root,
     assert tripwire == []
 
 
-async def test_brief_get_writes_no_suggestion(served, root):
+async def test_brief_get_writes_no_suggestion(served, root, open_gates):
     async with client(served) as c:
         r = await c.get("/api/brief", headers=auth(served))
     folder = root / "data" / "suggestions"

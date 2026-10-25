@@ -25,6 +25,8 @@ class Session:
     stop: object = field(default=None, repr=False, compare=False)
     # the Bookkeeper report file a peer agent just named (validated by tools.report_name); get_findings prefers it
     preferred_report: str | None = field(default=None, repr=False, compare=False)
+    # what the owner wrote in this session's turns: an LLM's note on a finding is kept only if it is in here verbatim
+    owner_texts: list = field(default_factory=list, repr=False, compare=False)
 
     def __post_init__(self):
         self.root = Path(self.root).resolve()

@@ -23,6 +23,9 @@ No ping-pong: a message carrying EndSessionContent, a review card, or one of our
 starting with NOTICE_PREFIX) never starts a turn; rate-limit, busy and refusal notices go out at most once per
 sender per window, then only acknowledgements.
 
+Stage gates (stages.py): a peer is asked only for a tool the current stage offers (PeerDispatch checks before
+sending; adopt_market_report checks again), so no delegation path skips them.
+
 The orchestrator is the SOLE SUPERVISOR. It delegates to two agents and uses the Forecaster and CH as tools:
 - Market scout (SCOUT_ADDR): scan_market (chat turns and the brief) goes to it as a MarketRequest, with
   ctx.send_and_receive. Its MarketResult names a report file, which is loaded (data/market_reports/M-*.json only)
@@ -733,7 +736,18 @@ class PeerDispatch:
         except Exception as exc:
             return {"error": f"report not readable ({type(exc).__name__})"}
 
+    def _open(self, session, name) -> bool:
+        """The stage gate BEFORE anything goes to a peer: a tool outside the current stage is never delegated (the
+        in-process call then refuses it with the stage's message)."""
+        gate = getattr(_core("tools"), "allowed", None)
+        try:
+            return gate is None or bool(gate(session, name))
+        except Exception:
+            return False
+
     async def __call__(self, session, name, args):
+        if name in ("scan_market", "get_findings") and not self._open(session, name):
+            return await self._local(session, name, args)
         if name == "scan_market" and self.scout:
             items = args.get("items") if isinstance(args.get("items"), list) else []
             payload = {"request_id": self._request_id(session, "orch-scan"), "items": [str(i)[:80] for i in items][:50],

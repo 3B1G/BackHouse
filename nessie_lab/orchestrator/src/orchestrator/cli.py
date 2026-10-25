@@ -20,6 +20,14 @@ Verifier) and returns one verified report:
   orchestrator bookkeeper-ingest <data/reports/R-*.json>   merge a report the Bookkeeper owner made by hand
   orchestrator bookkeeper-status                       baseline, covered through, days behind, finding counts
 
+The owner's review of the findings (stages: Audit -> Review -> Commit -> Forecast -> Suggest; `call` and every other
+entry point refuse a tool outside the current stage):
+  orchestrator review status [--json]                  the stage, every open finding and its proposed decision
+  orchestrator review decide <finding_id> accept|dismiss|revise [--note TEXT]
+  orchestrator review accept-errors                    accept every error the Bookkeeper's Verifier agreed with
+  orchestrator review prepare [--digest D]             write the decision file and the review suggestion, and print
+                                                       the `changes approve` command that commits it (passphrase)
+
 Nothing here approves or applies: the owner runs the approve command each suggestion carries."""
 import argparse
 import asyncio
@@ -181,6 +189,66 @@ def _bookkeeper(session, args) -> int:
         return 1
 
 
+def _review(session, args) -> int:
+    """orchestrator review ...: the owner's proposals and prepare. Nothing here commits: only the owner's signed
+    `changes approve` of the review suggestion does."""
+    from . import review
+    from .stages import StageLocked
+
+    try:
+        if args.review_command == "status":
+            out = review.status(session)
+            if args.json:
+                _print(out)
+                return 0
+            print(_review_text(out))
+            return 0
+        if args.review_command == "decide":
+            out = review.propose(session, args.finding, args.decision, args.note, by="owner_cli")
+        elif args.review_command == "accept-errors":
+            out = review.accept_verified_errors(session, by="owner_cli")
+        else:
+            out = review.prepare(session, args.digest)
+            print(f"Prepared decisions {out['digest']}: {out['decision_file']}")
+            print(f"Review suggestion: {out['suggestion_file']}")
+            print("Nothing is committed yet. The owner commits the review at their own terminal (it asks for the "
+                  "owner passphrase; do NOT add --apply):")
+            print(f"  {out['approve_command']}")
+            return 0
+    except (review.ReviewError, StageLocked) as exc:
+        print(f"review: {exc}")
+        return 1
+    for d in out.get("proposed") or []:
+        print(f"{d['finding_id']}: proposed {d['decision']}" + (f" (forced: {d['forced']})" if d.get("forced") else "")
+              + (f"; note: {d['note']}" if d.get("note") else ""))
+    if out.get("skipped_need_owner"):
+        print(f"left for one-by-one decisions: {', '.join(out['skipped_need_owner'])}")
+    print(f"Stage: {out['stage']} ({out['stage_why']})")
+    return 0
+
+
+def _review_text(out: dict) -> str:
+    from .fmt import usd
+
+    st = out["stage"]
+    lines = [f"Stage: {st['stage']} ({' -> '.join(st['order'])})", f"Why:   {st['why']}"]
+    if st.get("report"):
+        lines.append(f"Review: {st['report']} as of {st['as_of']}; {st['decided']} of {st['open_findings']} decided"
+                     + (f"; digest {st['digest']}" if st.get("digest") else ""))
+    for f in out.get("findings") or []:
+        p = f.get("proposal")
+        state = "-" if not p else (p["decision"] + (" (forced)" if p.get("forced") else "")
+                                   + (f" [{p['proposed_by']}]" if p.get("proposed_by") else "")
+                                   + (f" note: {p['note']}" if p.get("note") else ""))
+        lines.append(f"  {f['finding_id']:12} {str(f.get('verdict')):11} {str(f.get('verifier')):13} "
+                     f"{usd(f.get('impact_cents') or 0):>12}  {f.get('root_cause')} ({f.get('counterparty')}): {state}")
+    if (out.get("batch") or {}).get("line"):
+        lines.append(out["batch"]["line"])
+    if st.get("approve_command"):
+        lines.append(f"Commit (owner, at the terminal, no --apply): {st['approve_command']}")
+    return "\n".join(lines)
+
+
 def _ingest_text(out: dict) -> str:
     if out.get("noop"):
         return f"{out['report_id']}: already ingested; nothing changed (covers through {out['covered_through']})."
@@ -256,6 +324,17 @@ def main(argv=None):
     bi.add_argument("path")
     st = sub.add_parser("bookkeeper-status")
     st.add_argument("--json", action="store_true")
+    rv = sub.add_parser("review", help="the owner's review of the Bookkeeper's findings")
+    rsub = rv.add_subparsers(dest="review_command", required=True)
+    rs = rsub.add_parser("status")
+    rs.add_argument("--json", action="store_true")
+    rd = rsub.add_parser("decide")
+    rd.add_argument("finding")
+    rd.add_argument("decision", choices=["accept", "dismiss", "revise"])
+    rd.add_argument("--note", default=None)
+    rsub.add_parser("accept-errors")
+    rp = rsub.add_parser("prepare")
+    rp.add_argument("--digest", default=None, help="the digest `review status` showed (refused if it changed)")
     args = p.parse_args(argv)
     root = getattr(args, "root_after", None) or args.root
     online = args.online or getattr(args, "online_after", False)
@@ -293,6 +372,8 @@ def main(argv=None):
         return 0
     if args.command.startswith("bookkeeper-"):
         return _bookkeeper(session, args)
+    if args.command == "review":
+        return _review(session, args)
     if args.command == "api-schema":
         from .api import schema
         text = json.dumps(schema(), indent=2, ensure_ascii=False) + "\n"

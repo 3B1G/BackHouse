@@ -1,32 +1,36 @@
-"""The orchestrator's checks on the Bookkeeper's findings (replaces the direct use of checks_interim).
+"""The orchestrator's checks on the Bookkeeper's findings.
 
 THE OWNER DECIDES EACH FINDING (ORCHESTRATOR.md, "owner review before forecasting"): accept, dismiss or revise. An LLM
 never records that decision, and neither does the Bookkeeper's Verifier agreeing with it. So:
 
     check_findings(report, findings)              no decisions: every finding "downgrade" (awaiting the owner)
-    check_findings(report, findings, decisions)   accept -> "pass", dismiss -> "reject", revise -> "reject" (it goes
-                                                  back to the Bookkeeper as context for a new, verified report)
+    check_findings(report, findings, decisions)   accept -> "pass", dismiss -> "reject", revise -> "downgrade" (it goes
+                                                  back to the Bookkeeper as context for a new, verified report; until
+                                                  then only its cautious adjustments count, so dropping an owed bill
+                                                  can never make the forecast rosier)
                                                   a finding without a decision -> ValueError("review incomplete")
 
 Through contracts.passed_adjustments that means:
 - awaiting the owner ("downgrade"): only the cautious adjustments (money still owed, an overcharge that keeps
   costing) reach the forecast, never as recoverable, and nothing that would make it rosier (exclude_row,
-  correct_row). This is today's behaviour, the same as checks_interim's;
+  correct_row);
 - accepted ("pass"): all of the finding's adjustments;
-- dismissed or sent back for revision ("reject"): none.
+- sent back for revision ("downgrade"): the cautious ones only, as while awaiting the owner;
+- dismissed ("reject"): none.
 Plain code turns (report, decisions) into adjustments; the LLM never writes an adjustment or a money figure.
 
 What the Bookkeeper's Verifier loop said (bk schema 1.2: bk_adapter.verified_status, per published finding "agreed" |
 "replaced" | "verifier_only") is INFORMATION for the owner, shown next to each finding by summary(); it never passes
-a finding by itself. The stage gates and the owner-review flow that collects `decisions` are built on this hook."""
+a finding by itself. The stage gates and the owner-review flow that collects `decisions` (stages.py, review.py) are
+built on this hook."""
 import contracts as K
 
 from . import bk_adapter as A
 
-DECISIONS = {"accept": "pass", "dismiss": "reject", "revise": "reject"}
+DECISIONS = {"accept": "pass", "dismiss": "reject", "revise": "downgrade"}
 AWAITING = "awaiting the owner's decision (accept, dismiss or revise); until then only cautious adjustments count"
 REASONS = {"accept": "accepted by the owner", "dismiss": "dismissed by the owner: no adjustment",
-           "revise": "sent back to the Bookkeeper by the owner for a new report: no adjustment until it is reviewed"}
+           "revise": "sent back to the Bookkeeper by the owner for a new report: only cautious adjustments until then"}
 VERIFIER_INFO = {
     A.AGREED: "the Bookkeeper's Verifier agreed with it (information only; the owner decides)",
     A.REPLACED: "the Bookkeeper's Verifier disagreed and published its own version (information only)",

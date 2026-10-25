@@ -214,11 +214,22 @@ def _match(state: dict, f: dict, taken: set) -> str:
     return key
 
 
-def ingest(root, report_path, baseline: bool | None = None) -> dict:
+def ingest(root, report_path, baseline: bool | None = None, tag: str = "boh-1loc") -> dict:
     """Merge one report into the state (see the module docstring). Idempotent: a report already ingested is a no-op.
     baseline=True makes a FULL report the new baseline (bookkeeper-setup --force); by default the first full report
     becomes the baseline. -> {"noop", "report_id", "mode", "new", "updated", "closed", "not_rereported",
-    "covered_through"}"""
+    "covered_through"}. Afterwards stages.record_audit records what this audit covered (the data fingerprint and the
+    report's bank row count), which the stage gates compare against; that never re-records a review it already has."""
+    out = _ingest(root, report_path, baseline)
+    try:
+        from . import stages
+        stages.record_audit(root, tag)
+    except Exception as exc:                              # the stage then stays Audit, which is the safe side
+        out["review_note"] = f"the audit could not be recorded for the review ({type(exc).__name__})"
+    return out
+
+
+def _ingest(root, report_path, baseline: bool | None = None) -> dict:
     path = report_file(root, report_path)
     report, sha = read_report(path)
     rid = str(report["report_id"])
@@ -284,6 +295,8 @@ def ingest(root, report_path, baseline: bool | None = None) -> dict:
                                  "mode": "delta" if delta else "full", "window": window,
                                  "capabilities": A.capabilities(report), "ingested_at": _today_utc(),
                                  "verified": vs["verified"], "rounds": vs["rounds"],
+                                 "bank_rows": (report.get("sources") or {}).get("bank_rows")
+                                 if isinstance(report.get("sources"), dict) else None,
                                  "findings_new": new, "findings_closed": closed,
                                  "findings_not_rereported": dropped})
         save(root, state)

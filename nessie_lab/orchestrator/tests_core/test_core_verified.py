@@ -114,11 +114,12 @@ def test_owner_decisions_accept_dismiss_revise(session):
     decisions = {"F1": "accept", "F2": {"decision": "dismiss", "note": "paid by cheque"}, "F3": "accept",
                  "F4": "revise", "F5": "accept"}
     checks = {c.ref: c for c in checks_bk.check_findings(V12, findings, decisions)}
-    assert {k: c.status for k, c in checks.items()} == {"F1": "pass", "F2": "reject", "F3": "pass", "F4": "reject",
-                                                        "F5": "pass"}
+    assert {k: c.status for k, c in checks.items()} == {"F1": "pass", "F2": "reject", "F3": "pass",
+                                                        "F4": "downgrade", "F5": "pass"}   # revise: cautious only
     assert "owner's note: paid by cheque" in checks["F2"].reasons
     used = sorted((a.kind, a.finding_id, a.recoverable) for a in checks_bk.passed(V12, adjustments, findings, decisions))
-    assert used == [("correct_row", "F5", False), ("exclude_row", "F3", False), ("ongoing_overcharge", "F1", True)]
+    assert used == [("correct_row", "F5", False), ("exclude_row", "F3", False), ("ongoing_overcharge", "F1", True),
+                    ("ongoing_overcharge", "F4", False)]          # F4 revised: its ongoing overcharge still counts
     as_list = [{"report_id": "R-v12", "finding_id": k, "decision": v if isinstance(v, str) else v["decision"]}
                for k, v in decisions.items()]
     assert [c.status for c in checks_bk.check_findings(V12, findings, as_list)] == [c.status for c in checks.values()]
@@ -156,11 +157,12 @@ def test_get_findings_and_the_brief_show_verified_as_information(session):
     assert {c["status"] for c in r["checks"]} == {"downgrade"}
     base = tools.call(session, "forecast_base", {})
     assert {"finding_id": "F5", "kind": "correct_row"} not in base["adjustments_used"]
-    assert "verified by the Bookkeeper's Verifier (2 rounds); 0 of 5 finding(s) decided" in base["adjustments_note"]
+    assert ("verified by the Bookkeeper's Verifier (2 rounds); no committed review: each of the 5 finding(s) "
+            "awaits the owner") in base["adjustments_note"]
     from orchestrator.brief import brief
     text = brief(session, propose=False)["text"]
-    assert ("Bookkeeper (R-v12.json, verified by the Bookkeeper's Verifier (2 rounds)): 5 finding(s), 5 awaiting "
-            "your review (accept, dismiss or revise)") in text
+    assert ("Bookkeeper (R-v12.json, verified by the Bookkeeper's Verifier (2 rounds)): 5 open finding(s), 0 with a "
+            "proposed decision") in text
     assert "; Verifier agreed)" in text and "; Verifier's version)" in text and "; found by the Verifier)" in text
 
 
@@ -168,7 +170,7 @@ def test_brief_says_not_verified_for_a_1_1_report(session):
     put(session.root, report("R-old", "2026-10-21", [FEE("F1")]))
     from orchestrator.brief import brief
     text = brief(session, propose=False)["text"]
-    assert "Bookkeeper (R-old.json, not verified): 1 finding(s), 1 awaiting your review" in text
+    assert "Bookkeeper (R-old.json, not verified): 1 open finding(s), 0 with a proposed decision" in text
     assert "; not verified)" in text
 
 
