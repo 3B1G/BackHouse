@@ -1,0 +1,27 @@
+[project]
+name = "restaurant-changes"
+version = "0.1.0"
+description = "CH, the changes tool: applies owner-approved suggestions to cost_price.db and Nessie bills, with an append-only log"
+requires-python = ">=3.13,<3.14"
+dependencies = ["pydantic>=2.10,<3", "requests>=2.31,<3", "python-dotenv>=1,<2", "tzdata>=2024.1",
+                "restaurant-cost-price"]
+
+[project.scripts]
+changes = "changes.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+
+[tool.uv.sources]
+restaurant-cost-price = { path = "../cost_price", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/changes"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["tampered: the test forges rows on purpose, so verify is expected to report them"]
