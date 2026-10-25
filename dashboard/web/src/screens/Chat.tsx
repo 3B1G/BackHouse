@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
-import { IconArrowUpRight } from "@tabler/icons-react";
+import { IconArrowUp, IconArrowUpRight, IconPlayerStopFilled } from "@tabler/icons-react";
 import { askChat, recall, remember, type ChatAction, type ChatLink, type ChatSection, type ChatTurn } from "../api";
 import { AddData } from "../components/AddData";
 import { Answer } from "../components/Answer";
@@ -74,6 +74,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
   const input = useRef<HTMLTextAreaElement>(null);
   const asked = useRef(false);
   const latest = useRef(messages);
+  const stopper = useRef<AbortController | null>(null); // the answer on its way, until it's in or stopped
 
   useEffect(() => {
     latest.current = messages;
@@ -118,8 +119,11 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
     if (input.current) input.current.style.height = "";
     setBusy(true);
     setSteps([]);
+    const ctrl = new AbortController();
+    stopper.current = ctrl;
     try {
       await askChat(history, (e) => {
+        if (ctrl.signal.aborted) return;
         if (e.type === "tool") setSteps((s) => [...s, e.text]);
         else if (e.type === "needs_data") setMessages((m) => [...m, { role: "assistant", content: e.text, needsData: true }]);
         else if (e.type === "answer")
@@ -137,14 +141,33 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
             },
           ]);
         else setMessages((m) => [...m, { role: "assistant", content: e.text, failed: true }]);
-      });
+      }, ctrl.signal);
     } catch (err) {
-      setMessages((m) => [...m, { role: "assistant", content: (err as Error).message, failed: true }]);
+      if (!ctrl.signal.aborted) setMessages((m) => [...m, { role: "assistant", content: (err as Error).message, failed: true }]);
     } finally {
+      if (stopper.current === ctrl) stopper.current = null;
       setBusy(false);
       setSteps([]);
       input.current?.focus();
     }
+  };
+
+  // Stop (the send button while it answers, or Esc): the answer is dropped, and the question goes back in the box, to
+  // change or send again.
+  const stop = () => {
+    stopper.current?.abort();
+    const ms = latest.current;
+    const at = ms.length - 1;
+    if (ms[at]?.role !== "user") return; // its answer is already in
+    setMessages(ms.slice(0, at));
+    setDraft(ms[at].content);
+    requestAnimationFrame(() => {
+      const box = input.current;
+      if (!box) return;
+      grow(box);
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    });
   };
 
   // #/chat?ask=... asks a question straight away (links from the dashboard use it).
@@ -390,18 +413,36 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
                 void send(draft);
+              } else if (e.key === "Escape" && busy) {
+                e.preventDefault();
+                stop();
               }
             }}
             disabled={needSetup}
             placeholder={needSetup ? "Add your data above to start asking" : "Type a question"}
             className="min-h-12 flex-1 resize-none rounded-md border-2 border-rule bg-paper px-3 py-2.5 text-[1.0625rem] text-carbon placeholder:text-pencil focus:border-ink focus:outline-none"
           />
+          {/* Send, and while it answers, stop: the arrow and the square swap in place. */}
           <button
-            type="submit"
-            disabled={busy || needSetup || !draft.trim()}
-            className="min-h-12 rounded-md border-2 border-ink bg-ink px-5 text-base font-bold text-white transition-colors duration-150 hover:bg-[#173b29] disabled:border-rule disabled:bg-check disabled:text-pencil"
+            type={busy ? "button" : "submit"}
+            onClick={busy ? stop : undefined}
+            disabled={!busy && (needSetup || !draft.trim())}
+            aria-label={busy ? "Stop the answer" : "Send"}
+            title={busy ? "Stop (Esc)" : "Send"}
+            className="relative size-12 shrink-0 rounded-md border-2 border-ink bg-ink text-paper transition-colors duration-150 hover:bg-[#173b29] disabled:border-rule disabled:bg-check disabled:text-pencil"
           >
-            Ask
+            <span
+              aria-hidden="true"
+              className={`absolute inset-0 grid place-items-center transition-[opacity,scale] duration-200 motion-reduce:transition-none ${busy ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
+            >
+              <IconArrowUp size={22} stroke={2.5} />
+            </span>
+            <span
+              aria-hidden="true"
+              className={`absolute inset-0 grid place-items-center transition-[opacity,scale] duration-200 motion-reduce:transition-none ${busy ? "scale-100 opacity-100" : "scale-75 opacity-0"}`}
+            >
+              <IconPlayerStopFilled size={16} />
+            </span>
           </button>
         </div>
       </form>

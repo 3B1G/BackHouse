@@ -229,11 +229,13 @@ export type ChatEvent =
   | { type: "error"; text: string };
 
 /** Asks the chat a question with the conversation so far; streams what it looks at, then the answer. */
-export async function askChat(messages: ChatTurn[], onEvent: (e: ChatEvent) => void) {
+/** `signal` stops it: the request and its stream end, with an AbortError. */
+export async function askChat(messages: ChatTurn[], onEvent: (e: ChatEvent) => void, signal?: AbortSignal) {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ messages }),
+    signal,
   });
   if (!res.ok || !res.body) throw new Error(`The chat didn't answer (error ${res.status}). Try again.`);
   const reader = res.body.getReader();
