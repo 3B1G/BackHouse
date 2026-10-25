@@ -39,7 +39,7 @@ const NODES: MapNode[] = [
   agent("Changes", "Dry runs; acts on your approval", checkY(6)),
   agent("Scope check", "Is it about your money?", chatY(0)),
   agent("ASI:One", "Fetch.ai's model", chatY(1)),
-  agent("Tools", "12 read-only lookups", chatY(2)),
+  agent("Tools", "15 read-only tools", chatY(2)),
 ];
 const BY_ID = Object.fromEntries(NODES.map((n) => [n.id, n]));
 const left = (id: string) => BY_ID[id].x - BY_ID[id].w / 2;

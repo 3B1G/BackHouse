@@ -178,6 +178,8 @@ export const api = {
     ),
   /** Whether the bank and records are in yet; a check puts them there. */
   readiness: () => fetch("/api/readiness").then((r) => read<{ ready: boolean; missing: ("bank" | "records")[] }>(r)),
+  /** The forecast as it stands now: the same one the orchestrator and the Chat use once a review is signed. */
+  forecast: () => fetch("/api/forecast").then((r) => read<Forecast>(r)),
 };
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };

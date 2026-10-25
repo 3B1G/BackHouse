@@ -64,6 +64,14 @@ OPEN_CHANGE = {
 }
 DISH = re.compile(r"^[A-Za-z0-9 &'(),.-]{1,80}$")
 
+MENU = {
+    "name": "get_menu",
+    "description": "Read the menu as it is now: each dish's dine-in dinner price, its ingredient cost per plate and that cost "
+                   "as a share of the price, plus the approved price changes and removals that haven't started yet, with "
+                   "their dates. Read-only. Amounts are in cents.",
+    "input_schema": {"type": "object", "additionalProperties": False, "required": [], "properties": {}},
+}
+
 LABELS = {
     "get_bank_transaction": "Opening a bank transaction",
     "search_bank_transactions": "Searching the bank",
@@ -79,6 +87,7 @@ LABELS = {
     "run_what_if": "Running a what-if on 1,000 futures",
     "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
     "open_change": "Finding that change on your dashboard",
+    "get_menu": "Reading your menu",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
 
@@ -89,7 +98,7 @@ class ChatError(Exception):
 
 def _functions():
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE]]
+            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE, MENU]]
 
 
 def _paydays(f):
@@ -137,6 +146,45 @@ def _menu_change(args, cid=None):
             "monthly_cash_effect_cents": fc.get("monthly_cash_effect_cents"), "cash_change_cents": vs.get("cash_change_cents")}
 
 
+def _menu(cid=None):
+    """The menu from the price database, through the orchestrator, at most a minute old. It changes nothing."""
+    try:
+        m = orchestrator_bridge.menu(cid)
+    except orchestrator_bridge.OrchestratorError as e:
+        return {"error": f"The menu isn't available right now: {str(e)[:160]}"}
+    return {"prices_on": m.get("on"),
+            "dishes": [{"dish": d["item"], "price_cents": d["price_cents"], "plate_cost_cents": d.get("plate_cost_cents"),
+                        "food_cost_share": d.get("food_cost_pct")} for d in m.get("dishes", [])],
+            "approved_changes_not_started": [{k: c[k] for k in ("item", "kind", "price_cents", "available", "effective_from")
+                                              if k in c} for c in m.get("upcoming", [])]}
+
+
+def _state(ctx):
+    """The dashboard as the owner sees it now, from the orchestrator: their review, the approved changes still to start and
+    the open suggestions. Facts for the model, at most a minute old."""
+    if not ctx:
+        return "- The dashboard's review and suggestions can't be read right now."
+    r, lines = ctx.get("review") or {}, []
+    if r.get("open"):
+        decided = r.get("accepted", 0) + r.get("dismissed", 0) + r.get("revise", 0)
+        lines.append(f"The owner signed their review of the Bookkeeper's {r['open']} findings: {r.get('accepted', 0)} accepted, "
+                     f"{r.get('dismissed', 0)} dismissed. The forecast counts the accepted ones." if r.get("signed") else
+                     f"The Bookkeeper found {r['open']} problems; the owner has decided {decided} and hasn't signed the review, "
+                     "so the forecast doesn't count them yet.")
+    up = ctx.get("upcoming") or []
+    if up:
+        def one(c):
+            if c.get("kind") == "price":
+                return f"{c['item']} to {c.get('price_usd') or '$%.2f' % (c.get('price_cents', 0) / 100)} from {c['effective_from']}"
+            return f"{c['item']} {'back on' if c.get('available') else 'off'} the menu from {c['effective_from']}"
+        lines.append("Approved changes that haven't started: " + "; ".join(one(c) for c in up) + ". The forecast doesn't count "
+                     "approved changes yet; try_menu_change shows what one does.")
+    sug = ctx.get("suggestions") or []
+    lines.append("Open suggestions on the dashboard: " + "; ".join(s["title"] for s in sug) + "." if sug
+                 else "There are no open suggestions on the dashboard right now.")
+    return "\n".join(f"- {line}" for line in lines)
+
+
 def _open_change(args):
     """A button to that dish's change on the dashboard, with the owner's price filled in. It changes nothing."""
     dish = str(args.get("dish") or "").strip()
@@ -182,6 +230,8 @@ def _run_tool(name, raw_args, cid=None):
             out = _open_change(args)
         except (ValueError, TypeError):
             out = {"error": "That price doesn't look right."}
+    elif name == "get_menu":
+        out = _menu(cid)
     else:
         out = T.call_tool(name, args)
     (span.fail if "error" in out else span.done)(_size(out))
@@ -205,6 +255,8 @@ def _source(name, args):
 
 
 def _system(cid=None):
+    ctx = orchestrator_bridge.context(cid)              # the dashboard's state, at most a minute old
+    orchestrator_bridge.sync_forecast(cid)              # once a review is signed: the orchestrator's own forecast inputs
     f = forecast.run(group=cid)
     safe, flip = _paydays(f)
     return f"""You are BackHouse, the assistant in a restaurant owner's dashboard. The restaurant is Demo Bistro on Chestnut St
@@ -213,10 +265,16 @@ def _system(cid=None):
 
 What you know now. The books closed {f['as_of']}. Cash in the bank: ${f['cash_today_cents'] / 100:,.0f}. Payroll goes out every
 other Friday. Payroll is safe through {safe}; by {flip} it is a coin flip. Cash likely runs out {f['runout']['likely']}
-(bad case {f['runout']['bad']}, good case {f['runout']['good']}). Bank data runs {T.START} to {T.END}.
+(bad case {f['runout']['bad']}, good case {f['runout']['good']}). This is the same forecast the dashboard and the
+orchestrator show. Bank data runs {T.START} to {T.END}.
+
+The dashboard right now:
+{_state(ctx)}
 
 How to answer:
 - Look things up with the tools. Never guess a number: every number you give comes from the facts above or a tool result.
+- For prices, food costs or what's on the menu, use get_menu. Before suggesting a price change, check the approved changes
+  above: a dish with one already has its new price coming.
 - Tool amounts are in cents. Convert them to dollars.
 - Search with a date window when you look for an amount: a supplier's bills can have similar amounts months apart.
 - You can't change anything: no payments, emails, edits or approvals. When the owner asks you to approve, decline or change
