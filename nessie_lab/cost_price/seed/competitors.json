@@ -1,0 +1,579 @@
+{
+  "retrieved_at": "2026-10-24T21:16:13+00:00",
+  "restaurants": [
+    {
+      "name": "Il Casaro Pizzeria",
+      "address": "348 Columbus Ave, San Francisco, CA 94133",
+      "neighborhood": "North Beach",
+      "approx_distance_miles": 1.7,
+      "price_level": "$$",
+      "cuisine": "Neapolitan pizza / Italian",
+      "menu_url": "https://www.ilcasaropizzeria.com/menu",
+      "notes": "Single menu, no lunch/dinner split. 12-inch pies. No Funghi pizza or Chicken Parm. Wine prices are glass / half bottle / bottle; glass used. Static HTML, fetched fine.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "Margherita (V)",
+          "price_cents": 1800,
+          "service": "all_day",
+          "quote": "Margherita (V) $18",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Diavola Pizza",
+          "their_item": "Diavola",
+          "price_cents": 2000,
+          "service": "all_day",
+          "quote": "Diavola $20",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Bolognese",
+          "their_item": "Lasagna Bolognese",
+          "price_cents": 1900,
+          "service": "all_day",
+          "quote": "Lasagna Bolognese $19",
+          "match_confidence": 0.45
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "Insalata Romana (V)",
+          "price_cents": 1400,
+          "service": "all_day",
+          "quote": "Insalata Romana (V) $14",
+          "match_confidence": 0.5
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Imported Burrata (V)",
+          "price_cents": 1500,
+          "service": "all_day",
+          "quote": "Imported Burrata (V) $15",
+          "match_confidence": 0.6
+        },
+        {
+          "our_item": "Espresso",
+          "their_item": "Espresso",
+          "price_cents": 400,
+          "service": "all_day",
+          "quote": "Espresso $4",
+          "match_confidence": 1.0
+        },
+        {
+          "our_item": "House Wine (glass)",
+          "their_item": "Vino della Casa Rosso (glass)",
+          "price_cents": 1200,
+          "service": "all_day",
+          "quote": "Vino della Casa Rosso $12",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Cocktail",
+          "their_item": "Spritz",
+          "price_cents": 1400,
+          "service": "all_day",
+          "quote": "Spritz $14",
+          "match_confidence": 0.6
+        }
+      ]
+    },
+    {
+      "name": "Tony's Pizza Napoletana",
+      "address": "1570 Stockton St, San Francisco, CA 94133",
+      "neighborhood": "North Beach",
+      "approx_distance_miles": 1.6,
+      "price_level": "$$",
+      "cuisine": "Pizza (multi-style) / Italian-American",
+      "menu_url": "https://www.tonyspizzanapoletana.com/currentmenu",
+      "notes": "Dinner menu is a 4-page text PDF (readable with pdftotext; multi-column layout, so quotes use raw reading-order text). Prices have no $ sign. Margherita is the famous limited-daily 12-inch Neapolitan, priced above typical. Diavola sits in a different pizza-style section.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "MARGHERITA (Neapolitan)",
+          "price_cents": 3000,
+          "service": "dinner",
+          "quote": "MARGHERITA 30",
+          "match_confidence": 0.85
+        },
+        {
+          "our_item": "Diavola Pizza",
+          "their_item": "DIAVOLA",
+          "price_cents": 3550,
+          "service": "dinner",
+          "quote": "DIAVOLA hot red pepper oil, soppressata picante, arugula, mozzarella, shaved parmigiano 35.5",
+          "match_confidence": 0.75
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "CAESAR",
+          "price_cents": 1750,
+          "service": "dinner",
+          "quote": "CAESAR 17.5",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Garlic Bread",
+          "their_item": "SOURDOUGH GARLIC BREAD (plain)",
+          "price_cents": 1200,
+          "service": "dinner",
+          "quote": "SOURDOUGH GARLIC BREAD plain 12",
+          "match_confidence": 0.9
+        }
+      ]
+    },
+    {
+      "name": "Pizzeria Delfina (Pacific Heights)",
+      "address": "2406 California St, San Francisco, CA 94115",
+      "neighborhood": "Pacific Heights",
+      "approx_distance_miles": 0.9,
+      "price_level": "$$",
+      "cuisine": "Neapolitan-style pizza / Italian",
+      "menu_url": "https://www.pizzeriadelfina.com/pacific-heights-menus-1/",
+      "notes": "One 'Lunch / Dinner' menu for both services. 6% surcharge not included in prices. Funghi is a white pie with Hen of the Woods mushrooms. Small local group with a few locations.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "Margherita",
+          "price_cents": 2000,
+          "service": "all_day",
+          "quote": "Margherita | 20",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Funghi Pizza",
+          "their_item": "Funghi (white pie)",
+          "price_cents": 2600,
+          "service": "all_day",
+          "quote": "Funghi | 26",
+          "match_confidence": 0.75
+        },
+        {
+          "our_item": "Arancini",
+          "their_item": "Saffron Arancini",
+          "price_cents": 1100,
+          "service": "all_day",
+          "quote": "Saffron Arancini | 11",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Angelo & Franco Burrata",
+          "price_cents": 1600,
+          "service": "all_day",
+          "quote": "Angelo & Franco Burrata | 16",
+          "match_confidence": 0.65
+        },
+        {
+          "our_item": "Cocktail",
+          "their_item": "Agrumi Spritz",
+          "price_cents": 1600,
+          "service": "all_day",
+          "quote": "Agrumi Spritz | 16",
+          "match_confidence": 0.6
+        },
+        {
+          "our_item": "Espresso",
+          "their_item": "Espresso, Americano",
+          "price_cents": 400,
+          "service": "all_day",
+          "quote": "Espresso, Americano | 4",
+          "match_confidence": 0.95
+        }
+      ]
+    },
+    {
+      "name": "Delarosa (Marina)",
+      "address": "2175 Chestnut St, San Francisco, CA 94123",
+      "neighborhood": "Marina",
+      "approx_distance_miles": 0.1,
+      "price_level": "$$",
+      "cuisine": "Roman-style pizza / Italian",
+      "menu_url": "https://www.delarosasf.com/menus-marina/",
+      "notes": "Closest direct $$ competitor. 'All Day Menu'; 5% surcharge not included. '$' and the number are separate HTML elements, so normalized text reads '$ 18'. Caesar comes small/large; large used. Wine glass price is the number before '|'. Cocktail prices appear only in brunch and happy-hour sections, so skipped. Small local group (4 locations).",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "margherita",
+          "price_cents": 1800,
+          "service": "all_day",
+          "quote": "margherita marinara sauce, mozzarella, basil, parmesan $ 18",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Funghi Pizza",
+          "their_item": "funghi (white pizza)",
+          "price_cents": 2500,
+          "service": "all_day",
+          "quote": "funghi wild mushrooms, taleggio cheese, marinated onions, thyme, parmesan (white pizza) $ 25",
+          "match_confidence": 0.8
+        },
+        {
+          "our_item": "Chicken Parmesan",
+          "their_item": "ziti chicken parmigiana",
+          "price_cents": 2700,
+          "service": "all_day",
+          "quote": "ziti chicken parmigiana $ 27",
+          "match_confidence": 0.7
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "caesar salad (large)",
+          "price_cents": 1600,
+          "service": "all_day",
+          "quote": "caesar salad romaine lettuce, caesar dressing, croutons, parmesan cheese s $ 9 l $ 16",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Arancini",
+          "their_item": "crab arancini",
+          "price_cents": 1300,
+          "service": "all_day",
+          "quote": "crab arancini served with calabrese aioli $ 13",
+          "match_confidence": 0.7
+        },
+        {
+          "our_item": "House Wine (glass)",
+          "their_item": "Chianti, Marcanelli (glass)",
+          "price_cents": 1100,
+          "service": "all_day",
+          "quote": "Chianti | Marcanelli, Chianti Classico, IT 2018 11",
+          "match_confidence": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Trattoria Contadina",
+      "address": "1800 Mason St, San Francisco, CA 94133",
+      "neighborhood": "North Beach / Russian Hill border",
+      "approx_distance_miles": 1.4,
+      "price_level": "$$",
+      "cuisine": "Italian-American trattoria",
+      "menu_url": "https://www.trattoriacontadina.com/uploads/2/4/8/8/24884547/winter_menu-20262027.pdf",
+      "notes": "Dinner menu is a text PDF linked from https://www.trattoriacontadina.com/dinner-menu.html (that HTML page shows only desserts). Winter 2026-2027 menu. Its ravioli are chicken/cheese, not lobster. No pizza.",
+      "items": [
+        {
+          "our_item": "Bolognese",
+          "their_item": "Bolognese (spaghetti)",
+          "price_cents": 3300,
+          "service": "dinner",
+          "quote": "Bolognese 33 spaghetti | traditional beef & pork tomato ragu",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "Cesare",
+          "price_cents": 1600,
+          "service": "dinner",
+          "quote": "Cesare 16** romaine | parmesan | garlic croutons homemade dressing",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Caprese (burrata, tomatoes)",
+          "price_cents": 1800,
+          "service": "dinner",
+          "quote": "Caprese 18 buratta | tomatoes | basil balsamic | arugula",
+          "match_confidence": 0.8
+        },
+        {
+          "our_item": "Cocktail",
+          "their_item": "Negroni",
+          "price_cents": 1700,
+          "service": "dinner",
+          "quote": "Negroni | 17",
+          "match_confidence": 0.7
+        }
+      ]
+    },
+    {
+      "name": "North Beach Restaurant",
+      "address": "1512 Stockton St, San Francisco, CA 94133",
+      "neighborhood": "North Beach",
+      "approx_distance_miles": 1.6,
+      "price_level": "$$$",
+      "cuisine": "Tuscan / Italian",
+      "menu_url": "https://www.northbeachrestaurant.com/menus/north-beach-restaurant-dinner-menu.pdf",
+      "notes": "A tier above us (mains $27-46); included as an upper reference point. Dinner menu is a text PDF linked from the homepage. Prices have no $ sign.",
+      "items": [
+        {
+          "our_item": "Bolognese",
+          "their_item": "Tagliatelle Bolognese",
+          "price_cents": 3400,
+          "service": "dinner",
+          "quote": "Tagliatelle Bolognese traditional four-hour cooked beef & pork sugo 34",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Chicken Parmesan",
+          "their_item": "Chicken Parmigiana",
+          "price_cents": 3600,
+          "service": "dinner",
+          "quote": "Chicken Parmigiana breaded chicken breast, tomato sauce, mozzarella, Parmigiano Reggiano, add side of Rigatoni Pomodoro ($10) 36",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Grilled Salmon",
+          "their_item": "Salmon (baked wild king)",
+          "price_cents": 4300,
+          "service": "dinner",
+          "quote": "Salmon gf baked wild king salmon, grilled asparagus, beet puree 43",
+          "match_confidence": 0.8
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "Caesar Salad",
+          "price_cents": 1900,
+          "service": "dinner",
+          "quote": "Caesar Salad little gems, shaved Grana Padano, anchovies, house crouton, cacio e pepe dressing; add grilled chicken 10 19",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Arancini",
+          "their_item": "Arancini",
+          "price_cents": 1800,
+          "service": "dinner",
+          "quote": "Arancini v fried saffron risotto, mozzarella, parmigiano cream sauce 18",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Burrata (figs, prosciutto)",
+          "price_cents": 2900,
+          "service": "dinner",
+          "quote": "Burrata gf v roasted figs, aged Prosciutto di Parma, aged balsamic 29",
+          "match_confidence": 0.5
+        }
+      ]
+    },
+    {
+      "name": "Piazza Pellegrini",
+      "address": "659 Columbus Ave, San Francisco, CA 94133",
+      "neighborhood": "North Beach",
+      "approx_distance_miles": 1.4,
+      "price_level": "$$",
+      "cuisine": "Italian trattoria / pizza",
+      "menu_url": "https://www.piazzapellegrini.com/menu",
+      "notes": "Wix site with one all-day menu in tabs (open 11:30am daily). Only the first tab renders at /menu, so each item has a source_url for its tab; all prices are also embedded as JSON in the /menu HTML.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "Margherita",
+          "price_cents": 2195,
+          "service": "all_day",
+          "quote": "Margherita Mozzarella, tomato sauce, basil $21.95",
+          "match_confidence": 0.95,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=pizza"
+        },
+        {
+          "our_item": "Lobster Ravioli",
+          "their_item": "Lobster Ravioli",
+          "price_cents": 2995,
+          "service": "all_day",
+          "quote": "Lobster Ravioli House made ravioli with shrimp Aurora sauce $29.95",
+          "match_confidence": 1.0,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=primi"
+        },
+        {
+          "our_item": "Bolognese",
+          "their_item": "Rigatoni Bolognese",
+          "price_cents": 2495,
+          "service": "all_day",
+          "quote": "Rigatoni Bolognese Rigatoni pasta with meat sauce $24.95",
+          "match_confidence": 0.9,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=primi"
+        },
+        {
+          "our_item": "Chicken Parmesan",
+          "their_item": "Chicken Parmigiana",
+          "price_cents": 2695,
+          "service": "all_day",
+          "quote": "Chicken Parmigiana Breaded chicken breast, in tomato sauce and parmigiana with pasta $26.95",
+          "match_confidence": 0.95,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=secondi"
+        },
+        {
+          "our_item": "Grilled Salmon",
+          "their_item": "Salmon Al Forno",
+          "price_cents": 3295,
+          "service": "all_day",
+          "quote": "Salmon Al Forno Baked salmon with roasted vegetables and potatoes. $32.95",
+          "match_confidence": 0.8,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=secondi"
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "Cesare",
+          "price_cents": 1495,
+          "service": "all_day",
+          "quote": "Cesare Hearts of baby romaine lettuce, Italian parmesan and Tuscan bread croutons, in our traditional dressing $14.95",
+          "match_confidence": 0.9,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=insalate"
+        },
+        {
+          "our_item": "Garlic Bread",
+          "their_item": "Cheesy Garlic Bread",
+          "price_cents": 1000,
+          "service": "all_day",
+          "quote": "Cheesy Garlic Bread $10",
+          "match_confidence": 0.85,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=insalate"
+        },
+        {
+          "our_item": "Espresso",
+          "their_item": "Espresso",
+          "price_cents": 300,
+          "service": "all_day",
+          "quote": "Espresso $3",
+          "match_confidence": 1.0,
+          "source_url": "https://www.piazzapellegrini.com/menu?location=Columbus+Avenue&menu=dessert"
+        }
+      ]
+    },
+    {
+      "name": "Mona Lisa Restaurant & Bar",
+      "address": "414 Columbus Ave, San Francisco, CA 94133",
+      "neighborhood": "North Beach",
+      "approx_distance_miles": 1.6,
+      "price_level": "$$",
+      "cuisine": "Italian (pasta, pinsa/pizza, secondi)",
+      "menu_url": "https://www.monalisasf.com/food-menu",
+      "notes": "One 'Our Menu' with no lunch/dinner label, so service is unknown. Drink items come from the drink menu (source_url). The lobster ravioli also contains shrimp. Prices sit at the top of $$.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "Margherita (pinsa/pizza)",
+          "price_cents": 2100,
+          "service": "unknown",
+          "quote": "Margherita $21.00",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Diavola Pizza",
+          "their_item": "Diavola",
+          "price_cents": 2400,
+          "service": "unknown",
+          "quote": "Diavola $24.00",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Cacio e Pepe",
+          "their_item": "Bucatini Cacio E Pepe",
+          "price_cents": 2200,
+          "service": "unknown",
+          "quote": "Bucatini Cacio E Pepe $22.00",
+          "match_confidence": 1.0
+        },
+        {
+          "our_item": "Lobster Ravioli",
+          "their_item": "Ravioli Aragosta E Gamberi",
+          "price_cents": 3800,
+          "service": "unknown",
+          "quote": "Ravioli Aragosta E Gamberi $38.00",
+          "match_confidence": 0.85
+        },
+        {
+          "our_item": "Chicken Parmesan",
+          "their_item": "Pollo Alla Parmigiana",
+          "price_cents": 3200,
+          "service": "unknown",
+          "quote": "Pollo Alla Parmigiana $32.00",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Grilled Salmon",
+          "their_item": "Salmon (grilled wild king)",
+          "price_cents": 3500,
+          "service": "unknown",
+          "quote": "Salmon $35.00 Grilled Wild King Salmon Filet",
+          "match_confidence": 1.0
+        },
+        {
+          "our_item": "Arancini",
+          "their_item": "Saffron Arancini",
+          "price_cents": 2100,
+          "service": "unknown",
+          "quote": "Saffron Arancini $21.00",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Burrata Fresca",
+          "price_cents": 2500,
+          "service": "unknown",
+          "quote": "Burrata Fresca $25.00",
+          "match_confidence": 0.65
+        },
+        {
+          "our_item": "Caesar Salad",
+          "their_item": "Insalata Alla Cesare",
+          "price_cents": 1600,
+          "service": "unknown",
+          "quote": "Insalata Alla Cesare $16.00",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "House Wine (glass)",
+          "their_item": "Vino Rosso (Glass) Chianti",
+          "price_cents": 1500,
+          "service": "unknown",
+          "quote": "Chianti | Italy $15.00",
+          "match_confidence": 0.7,
+          "source_url": "https://www.monalisasf.com/drink-menu"
+        },
+        {
+          "our_item": "Cocktail",
+          "their_item": "Leonardo's Negroni",
+          "price_cents": 1800,
+          "service": "unknown",
+          "quote": "Leonardo's Negroni $18.00",
+          "match_confidence": 0.7,
+          "source_url": "https://www.monalisasf.com/drink-menu"
+        }
+      ]
+    },
+    {
+      "name": "A16 San Francisco",
+      "address": "2355 Chestnut St, San Francisco, CA 94123",
+      "neighborhood": "Marina",
+      "approx_distance_miles": 0.1,
+      "price_level": "$$$",
+      "cuisine": "Southern Italian / Neapolitan pizza",
+      "menu_url": "https://www.a16pizza.com/san-francisco/menu",
+      "notes": "Michelin-listed and a tier above us ($$$), but on our street, so it works as a local ceiling. One menu; opens 5pm Mon-Thu and noon Fri-Sun, so service is unknown. 6.5% surcharge not included. Vesuvio (spicy soppressata) is their Diavola equivalent.",
+      "items": [
+        {
+          "our_item": "Margherita Pizza",
+          "their_item": "Margherita",
+          "price_cents": 2500,
+          "service": "unknown",
+          "quote": "Margherita tomato, fior di latte, basil, olive oil 25",
+          "match_confidence": 0.95
+        },
+        {
+          "our_item": "Funghi Pizza",
+          "their_item": "Funghi",
+          "price_cents": 2800,
+          "service": "unknown",
+          "quote": "Funghi wild mushroom, spinach, grana padano, caciocavallo, mozzarella, garlic, chili, oregano 28",
+          "match_confidence": 0.9
+        },
+        {
+          "our_item": "Diavola Pizza",
+          "their_item": "Vesuvio",
+          "price_cents": 2700,
+          "service": "unknown",
+          "quote": "Vesuvio tomato, spicy soppressata, scamorza, caciocavallo, chili, garlic 27",
+          "match_confidence": 0.7
+        },
+        {
+          "our_item": "Burrata & Heirloom Tomato",
+          "their_item": "Artigiana Burrata",
+          "price_cents": 2100,
+          "service": "unknown",
+          "quote": "Artigiana Burrata crostini, olive oil, sea salt | add prosciutto di parma 21",
+          "match_confidence": 0.6
+        }
+      ]
+    }
+  ]
+}

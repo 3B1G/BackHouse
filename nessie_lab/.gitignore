@@ -14,3 +14,15 @@ data/forecasts/
 data/reports/
 # local Python environment
 .venv/
+
+# market scout
+.pytest_cache/
+data/market_reports/
+data/market_pages/
+data/audit/
+# SQLite WAL sidecars (cost_price.db)
+*.db-wal
+*.db-shm
+# changes tool locks; the cost_price seal is local to each machine
+data/changes-locks/
+data/*.seal.json
