@@ -339,8 +339,10 @@ const answer = await (await fetch(`${API}/api/ask`, {
 
 `./online.sh` (in `nessie_lab/`) brings the orchestrator, the Bookkeeper and its Verifier online together, each in
 mailbox mode, and stops them together on Ctrl-C; `nessie_lab/bookkeeper/README.md` ("ASI orchestrator integration")
-describes it. They talk through their Agentverse mailboxes and share `data/`, so they run on one machine. In
-`nessie_lab/.env`:
+describes it. They talk through their Agentverse mailboxes. With `AGENTVERSE_TOKEN` set, the Bookkeeper attaches each
+report to its reply (an Agentverse file only the orchestrator may read), and the orchestrator saves it into its own
+`data/reports/` (`fetch_report`), so the two can run on different machines; without it they share `data/` on one
+machine. In `nessie_lab/.env`:
 
 1. `ORCHESTRATOR_SEED` (private and stable: it fixes the address) and `ORCHESTRATOR_API_KEY` (or `ASI1_API_KEY`).
 2. `BOOKKEEPER_ADDR`: the Bookkeeper's address, which `./online.sh` prints. With the Bookkeeper's seed in the same

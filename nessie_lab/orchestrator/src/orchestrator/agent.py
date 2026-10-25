@@ -47,6 +47,7 @@ ORCHESTRATOR_ALLOWED_ORIGINS (never "*"). REST: POST /ask (AskRequest -> AskResp
 the JSON API for the frontend is in api.py. All are registered only when the server is bound to a loopback
 address. No route approves or applies anything."""
 import asyncio
+import base64
 import contextlib
 import hmac
 import json
@@ -68,8 +69,8 @@ from uagents.asgi import ASGIServer
 from uagents.registration import AlmanacApiRegistrationPolicy
 from uagents.resolver import GlobalResolver, Resolver
 from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement, ChatMessage, EndSessionContent, MetadataContent, StartSessionContent, TextContent,
-    chat_protocol_spec,
+    ChatAcknowledgement, ChatMessage, EndSessionContent, MetadataContent, ResourceContent, StartSessionContent,
+    TextContent, chat_protocol_spec,
 )
 from uagents_core.contrib.protocols.chat.cards import (
     CtaAction, ReviewCardPayload, ReviewSummaryRow, create_card_content, extract_card_response,
@@ -92,6 +93,10 @@ MAX_TRACKED = 5000                                           # senders the rate 
 MAX_SESSIONS = 500
 PEER_TIMEOUT = 25
 MAX_WAITING = 8                                              # peer replies awaited by request_id at once
+STORAGE_FILE = re.compile(r"^agent-storage://\S+/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$", re.I)
+REPORT_FILE = re.compile(r"^(?:data/reports/)?(R-[A-Za-z0-9._-]+\.json)$")    # tools.REPORT_NAME, in data/reports
+MAX_FETCHED_REPORT = 5 * 1024 * 1024                         # bytes; a Bookkeeper report is about 70 KB
+ATTACHED = "_attached"                                       # reply key for the files a peer attached (attached_files)
 LOCAL_CLIENT_ENDPOINT = "http://127.0.0.1:8007/submit"       # 8006 is the Market scout's port
 CORS_METHODS = "GET, POST, OPTIONS"
 CORS_HEADERS = "Authorization, Content-Type"
@@ -613,6 +618,56 @@ def _has_bk_state(session) -> bool:
         return False
 
 
+def attached_files(message: ChatMessage) -> list[dict]:
+    """The Agentverse files a peer's reply attaches, as {"asset_id", "filename"}: agent-storage resources whose id is a
+    UUID. Only the id is used, with our own storage address, so no URL in a message is ever followed."""
+    found = []
+    for part in message.content:
+        if isinstance(part, ResourceContent):
+            for resource in part.resource if isinstance(part.resource, list) else [part.resource]:
+                if match := STORAGE_FILE.fullmatch(str(getattr(resource, "uri", ""))):
+                    metadata = getattr(resource, "metadata", None) or {}
+                    found.append({"asset_id": match.group(1), "filename": str(metadata.get("filename", ""))[:200]})
+    return found[:4]
+
+
+def fetch_report(root: Path, reply: dict, identity: Identity | None, store=None) -> str | None:
+    """A Bookkeeper on another machine attaches its published report: save it as data/reports/<the name the reply
+    gives>, so everything that reads reports by name (bk_runner, get_findings) works unchanged. Nothing to do when
+    nothing is attached or the file is already here (the Bookkeeper shares this machine). The reply loses its
+    ATTACHED key either way. Returns a note for the turn; never raises."""
+    files = reply.pop(ATTACHED, None) or []
+    named = REPORT_FILE.fullmatch(str(reply.get("filename") or ""))
+    if not files or named is None:
+        return None
+    name = named.group(1)
+    target = Path(root) / "data" / "reports" / name
+    if target.exists():
+        return None
+    asset = next((f for f in files if f["filename"] == name), files[0])
+    part = target.with_name(f"{name}.part")
+    try:
+        if store is None:
+            from uagents_core.config import AgentverseConfig
+            from uagents_core.storage import ExternalStorage
+            # signed in as this agent, which the Bookkeeper let read the file; uagents_core 0.4.12's default storage
+            # address names a config field it lacks, so the address is passed
+            store = ExternalStorage(identity=identity, storage_url=AgentverseConfig().storage_api)
+        raw = base64.b64decode(store.download(asset["asset_id"])["contents"], validate=True)
+        if len(raw) > MAX_FETCHED_REPORT:
+            raise ValueError("the attached report is too large")
+        report = json.loads(raw)
+        if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
+            raise ValueError("the attachment is not a Bookkeeper report")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        part.write_bytes(raw)
+        os.replace(part, target)
+        return f"bookkeeper report {name}: fetched from Agentverse"
+    except Exception as exc:
+        part.unlink(missing_ok=True)
+        return f"bookkeeper report {name}: attached, but not fetched ({type(exc).__name__})"
+
+
 class PeerReplies:
     """Replies a peer sends LATER, outside ctx.send_and_receive's session, matched by (peer, request_id). The
     Bookkeeper answers a ReportRequest from the handler of its Verifier's reply, so its final ChatMessage carries
@@ -646,6 +701,8 @@ class PeerReplies:
         future = self.waiting.pop((peer, body["request_id"]), None)
         if future is None or future.done():
             return False
+        if files := attached_files(message):
+            body[ATTACHED] = files
         future.set_result(body)
         return True
 
@@ -657,20 +714,34 @@ class PeerDispatch:
 
     bk_from_chat: get_findings with no Bookkeeper baseline asks the Bookkeeper for a run (only with an explicit
     ORCHESTRATOR_USE_AGENTS=1 and an owner turn; the constructor default keeps the old behaviour for direct use).
-    replies / me: the service's PeerReplies and our own address, for ask_bookkeeper."""
+    replies / me: the service's PeerReplies and our own address, for ask_bookkeeper. root / identity: where an
+    attached Bookkeeper report is saved, and who fetches it (fetch_report); without a root nothing is fetched."""
 
     def __init__(self, ctx, scout: str | None = None, bookkeeper: str | None = None, timeout: int = PEER_TIMEOUT,
-                 replies: PeerReplies | None = None, me: str | None = None, bk_from_chat: bool = True):
+                 replies: PeerReplies | None = None, me: str | None = None, bk_from_chat: bool = True,
+                 root: Path | None = None, identity: Identity | None = None):
         self.ctx, self.scout, self.bookkeeper, self.timeout = ctx, scout, bookkeeper, timeout
         self.replies, self.me, self.bk_from_chat = replies, me, bk_from_chat
+        self.root, self.identity = root, identity
         self.notes: list[str] = []
         self.degraded = False
 
+    async def _fetch(self, reply: dict | None):
+        """An attached report goes into data/reports before anything reads the reply that names it."""
+        if reply is None or ATTACHED not in reply:
+            return
+        if self.root is None:
+            reply.pop(ATTACHED)
+        elif note := await asyncio.to_thread(fetch_report, self.root, reply, self.identity):
+            self.notes.append(note)
+
     async def ask_bookkeeper(self, payload: dict, timeout: float = 3600) -> tuple[dict | None, str]:
         """Send a ReportRequest and wait for the Bookkeeper's reply matched by request_id (see PeerReplies); without
-        a PeerReplies, ctx.send_and_receive. (reply, why-not)."""
+        a PeerReplies, ctx.send_and_receive. A report it attached is saved first (_fetch). (reply, why-not)."""
         if self.replies is None or not payload.get("request_id"):
-            return await self._call(self.bookkeeper, payload, timeout)
+            reply, why = await self._call(self.bookkeeper, payload, timeout)
+            await self._fetch(reply)
+            return reply, why
         rid = str(payload["request_id"])
         try:
             future = self.replies.expect(self.bookkeeper, rid)
@@ -679,7 +750,9 @@ class PeerDispatch:
         try:
             await self.ctx.send(self.bookkeeper, chat_message([TextContent(type="text",
                                                                            text=json.dumps(payload, default=str))]))
-            return await asyncio.wait_for(future, timeout), ""
+            reply = await asyncio.wait_for(future, timeout)
+            await self._fetch(reply)
+            return reply, ""
         except asyncio.TimeoutError:
             return None, "timed out"
         except Exception as exc:
@@ -709,7 +782,11 @@ class PeerDispatch:
             body = json.loads("\n".join(p.text for p in reply.content if isinstance(p, TextContent)))
         except (ValueError, AttributeError):
             return None, "reply was not JSON"
-        return (body, "") if isinstance(body, dict) else (None, "reply was not a JSON object")
+        if not isinstance(body, dict):
+            return None, "reply was not a JSON object"
+        if files := attached_files(reply):
+            body[ATTACHED] = files
+        return body, ""
 
     def _fallback(self, who: str, why: str):
         self.degraded = True
@@ -775,6 +852,7 @@ class PeerDispatch:
             payload = {"request_id": self._request_id(session, "orch-bk"),
                        "nessie_tag": getattr(session, "tag", "boh-1loc"), "as_of": self._as_of(session)}
             reply, why = await self._call(self.bookkeeper, payload)
+            await self._fetch(reply)
             check = getattr(_core("tools"), "report_name", None)
             filename = reply.get("filename") if reply is not None else None
             named = check(filename) if check is not None and filename else None
@@ -795,8 +873,10 @@ class Orchestrator:
     def __init__(self, root: Path, allowed: set[str] | None, limiter: RateLimit | None = None, cards=False,
                  use_agents=False, scout=None, bookkeeper=None, llm_factory=None, offline=True, tag="boh-1loc",
                  owners: set[str] | None = None, mailbox: bool | None = None, address: str | None = None,
-                 bk_from_chat: bool = False, peer_endpoints: dict[str, str] | None = None):
+                 bk_from_chat: bool = False, peer_endpoints: dict[str, str] | None = None,
+                 identity: Identity | None = None):
         self.root = Path(root)
+        self.identity = identity                          # this agent, for fetching the reports peers attach
         self.allowed = None if allowed is None else set(allowed)   # None = anyone (mailbox mode)
         self.mailbox = (allowed is None) if mailbox is None else mailbox
         self.owners = set(owners or ())                   # mailbox mode: who may make it propose changes
@@ -834,7 +914,7 @@ class Orchestrator:
     def dispatch(self, ctx, owner: bool = True):
         if self.delegating:
             return PeerDispatch(ctx, self.scout, self.bookkeeper, replies=self.replies, me=self.address,
-                                bk_from_chat=self.bk_from_chat and owner)
+                                bk_from_chat=self.bk_from_chat and owner, root=self.root, identity=self.identity)
         return None
 
     async def bookkeeper_op(self, ctx, op: str, force: bool = False, timeout: float | None = None) -> dict:
@@ -854,7 +934,8 @@ class Orchestrator:
         limit = timeout or (R.SETUP_TIMEOUT if op == "setup" else R.UPDATE_TIMEOUT)
         try:
             if self.use_agents and self.bookkeeper:
-                d = PeerDispatch(ctx, bookkeeper=self.bookkeeper, replies=self.replies, me=self.address)
+                d = PeerDispatch(ctx, bookkeeper=self.bookkeeper, replies=self.replies, me=self.address,
+                                 root=self.root, identity=self.identity)
 
                 async def agent(payload):
                     reply, why = await d.ask_bookkeeper(payload, limit)
@@ -868,17 +949,17 @@ class Orchestrator:
                         out = await R.asetup(self.root, agent, limit, force, self.tag, self.address or R.SENDER)
                     else:
                         out = await R.aupdate(self.root, agent, limit, self.tag, True, self.address or R.SENDER)
-                    return {**out, "degraded": False, "notes": ["delegated to the Bookkeeper agent"]}
+                    return {**out, "degraded": False, "notes": ["delegated to the Bookkeeper agent", *d.notes]}
                 except R.AgentTimeout as exc:              # it may still be running: no second run in-process
                     return {"status": "error", "error": str(exc), "degraded": True,
-                            "notes": ["Bookkeeper agent timed out; not rerun in-process"]}
+                            "notes": ["Bookkeeper agent timed out; not rerun in-process", *d.notes]}
                 except R.AgentUnreachable as exc:          # it never ran: run it here instead
                     degraded = True
                     notes.append(f"degraded: {clean_text(str(exc), 200)}; ran the Bookkeeper in-process instead")
                 except (R.BookkeeperError, S.StateError) as exc:
                     # it ran and failed, or its report was bad: running it again would double the ASI calls
                     return {"status": "error", "error": str(exc), "degraded": True,
-                            "notes": ["Bookkeeper agent failed; not rerun in-process"]}
+                            "notes": ["Bookkeeper agent failed; not rerun in-process", *d.notes]}
             fn = R.setup if op == "setup" else R.update
             kw = {"force": force} if op == "setup" else {}
             out = await asyncio.to_thread(lambda: fn(self.root, timeout=limit, tag=self.tag,
@@ -1118,7 +1199,7 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
                            llm_factory=llm_factory, offline=env_flag("ORCHESTRATOR_OFFLINE", default=True),
                            tag=os.getenv("ORCHESTRATOR_TAG", "boh-1loc").strip() or "boh-1loc",
                            owners=owners, mailbox=mailbox, address=agent.address, bk_from_chat=bk_from_chat,
-                           peer_endpoints=peers)
+                           peer_endpoints=peers, identity=Identity.from_seed(seed, 0))
     agent.include(build_protocol(service, {a for a in (scout, bookkeeper) if a}), publish_manifest=mailbox)
     if host in LOOPBACK:
         from . import api

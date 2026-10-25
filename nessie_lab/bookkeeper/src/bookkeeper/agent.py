@@ -1,11 +1,13 @@
 """Agent Chat Protocol boundary for the ASI orchestrator, the Bookkeeper and Verifier agents, and the local client."""
+import asyncio
 import json
 import logging
 import os
 import time
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import uagents.asgi
@@ -18,8 +20,9 @@ from uagents_core.config import AgentverseConfig
 from uagents_core.identity import Identity
 from uagents_core.registration import AgentRegistrationPolicy
 from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement, ChatMessage, EndSessionContent, TextContent, chat_protocol_spec,
+    ChatAcknowledgement, ChatMessage, EndSessionContent, Resource, ResourceContent, TextContent, chat_protocol_spec,
 )
+from uagents_core.storage import ExternalStorage
 
 from .contracts import Drafted, ReportRequest, RevisionRequest, VerifyRequest
 from .runner import Bookkeeper, failure_message
@@ -75,6 +78,26 @@ def report_summary(root: Path, filename: str) -> str | None:
         return None
 
 
+def report_storage(token: str) -> ExternalStorage:
+    """Agentverse's file storage, signed in with the account's API key (AGENTVERSE_TOKEN). uagents_core 0.4.12's
+    default storage address names a config field it lacks, so the address is passed."""
+    return ExternalStorage(api_token=token, storage_url=AgentverseConfig().storage_api)
+
+
+def attach_report(root: Path, filename: str, reader: str, token: str, store=None) -> ResourceContent:
+    """The published report as an Agentverse file only `reader` (who asked for it) may read, so it reaches an
+    orchestrator on another machine: the reply carries the report, not just its name on this machine. Agentverse keeps
+    it a day; the orchestrator fetches it as soon as the reply arrives."""
+    name = Path(filename).name
+    store = store or report_storage(token)
+    asset_id = store.create_asset(name=name, content=(root / filename).read_bytes(), mime_type="application/json")
+    store.set_permissions(asset_id, reader, read=True, write=False)
+    resource_id = UUID(asset_id)
+    return ResourceContent(resource_id=resource_id if resource_id.version == 4 else uuid4(), resource=Resource(
+        uri=f"agent-storage://{store.storage_url}/{asset_id}",
+        metadata={"mime_type": "application/json", "role": "bookkeeper-report", "filename": name}))
+
+
 class LocalRegistration(AgentRegistrationPolicy):
     """Keep the localhost demo off the public agent registry."""
 
@@ -82,9 +105,10 @@ class LocalRegistration(AgentRegistrationPolicy):
         return None
 
 
-def chat_message(text: str, end=False):
-    """Create a standard chat message, ending the request only after its final response."""
-    content = [TextContent(type="text", text=text)]
+def chat_message(text: str, end=False, extra=()):
+    """Create a standard chat message, any attachments after its text, ending the request only after its final
+    response."""
+    content = [TextContent(type="text", text=text), *extra]
     if end:
         content.append(EndSessionContent(type="end-session"))
     return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(), content=content)
@@ -119,13 +143,14 @@ async def acknowledge(ctx: Context, sender: str, message: ChatMessage):
 
 
 def build_protocol(service: Bookkeeper, verifier_address: str, allowed: set[str] | None = None,
-                   orchestrator: str | None = None):
+                   orchestrator: str | None = None, attach=None):
     """Bind requests to the service while retaining the sender's session context.
 
     A new draft goes to the Verifier, which may send it back for revision rounds; the orchestrator is answered when the
     Verifier replies with the published report. allowed: the only senders whose requests run (None: anyone); others
     get a note at most once an hour. Senders other than the orchestrator are told a new run has started, and every
-    report reply carries a readable `summary`."""
+    report reply carries a readable `summary`. attach(filename, reader): the report as a file only the requester may
+    read (attach_report), so it reaches an orchestrator on another machine; None (local mode) names the file only."""
     protocol = Protocol(spec=chat_protocol_spec)
     pending = {}                   # report_id -> orchestrator address, while the Verifier works
     refuse = refuser("This Bookkeeper takes requests only from the Hermes orchestrator and its owner."
@@ -136,6 +161,17 @@ def build_protocol(service: Bookkeeper, verifier_address: str, allowed: set[str]
         if summary := report_summary(service.root, result.filename):
             response["summary"] = summary
         return response
+
+    async def attachments(ctx: Context, response: dict, reader: str) -> list:
+        """A published report's reply also carries the file, where this agent attaches reports. A failed upload
+        leaves the reply as it was: it still names the file."""
+        if attach is None or response.get("status") == "error" or not isinstance(response.get("filename"), str):
+            return []
+        try:
+            return [await asyncio.to_thread(attach, response["filename"], reader)]
+        except Exception as exc:
+            ctx.logger.warning(f"Report {response['filename']} is named but not attached: {failure_message(exc)}")
+            return []
 
     async def send_draft(ctx: Context, drafted: Drafted):
         await ctx.send(verifier_address, chat_message(VerifyRequest(
@@ -168,7 +204,8 @@ def build_protocol(service: Bookkeeper, verifier_address: str, allowed: set[str]
             except Exception as exc:
                 ctx.logger.error(f"Recording the verified report failed: {failure_message(exc)}")
                 response = error_response(body.get("request_id"), exc)
-        await ctx.send(orchestrator, chat_message(json.dumps(response), end=True))
+        await ctx.send(orchestrator, chat_message(json.dumps(response), end=True,
+                                                  extra=await attachments(ctx, response, orchestrator)))
 
     @protocol.on_message(ChatMessage)
     async def handle_message(ctx: Context, sender: str, message: ChatMessage):
@@ -204,7 +241,8 @@ def build_protocol(service: Bookkeeper, verifier_address: str, allowed: set[str]
         except Exception as exc:
             ctx.logger.error(f"Bookkeeper request failed: {failure_message(exc)}")
             response = error_response(request.request_id, exc)
-        await ctx.send(sender, chat_message(json.dumps(response), end=True))
+        await ctx.send(sender, chat_message(json.dumps(response), end=True,
+                                            extra=await attachments(ctx, response, sender)))
 
     @protocol.on_message(ChatAcknowledgement)
     async def handle_ack(ctx: Context, sender: str, message: ChatAcknowledgement):
@@ -311,7 +349,8 @@ def allowed_senders(orchestrator):
 
 def make_agent(root: Path, port=8001):
     """Create the Bookkeeper uAgent; mailbox use requires explicit environment configuration. In mailbox mode only
-    allowed_senders() may request reports; in local mode only local peers can reach it, as before."""
+    allowed_senders() may request reports, and with AGENTVERSE_TOKEN each report goes back attached (attach_report),
+    so the orchestrator can run on another machine; in local mode only local peers can reach it, as before."""
     verifier = peer_address("BOOKKEEPER_VERIFIER_ADDRESS", "VERIFIER_SEED")
     agent, mailbox = local_agent("bookkeeper", "BOOKKEEPER", port, {
         Identity.from_seed(LOCAL_CLIENT_SEED, 0).address:
@@ -322,8 +361,12 @@ def make_agent(root: Path, port=8001):
     if mailbox and not allowed:
         LOG.warning("No orchestrator (ORCHESTRATOR_SEED or BOOKKEEPER_ORCHESTRATOR_ADDRESS) and no "
                     "BOOKKEEPER_ALLOWED_SENDERS: nobody can request a report")
-    agent.include(build_protocol(Bookkeeper(root, model=os.getenv("ASI_MODEL", "asi1")), verifier, allowed, orchestrator),
-                  publish_manifest=mailbox)
+    token = os.getenv("AGENTVERSE_TOKEN", "").strip()
+    if mailbox and not token:
+        LOG.warning("No AGENTVERSE_TOKEN: reports go back by name only, so the orchestrator must share this machine")
+    attach = partial(attach_report, root, token=token) if mailbox and token else None
+    agent.include(build_protocol(Bookkeeper(root, model=os.getenv("ASI_MODEL", "asi1")), verifier, allowed, orchestrator,
+                                 attach), publish_manifest=mailbox)
     return agent
 
 
