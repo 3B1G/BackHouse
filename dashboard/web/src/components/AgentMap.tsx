@@ -1,7 +1,12 @@
 import { IconCheck } from "@tabler/icons-react";
 import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { LiveOrb } from "@/components/ui/live-orb";
 import { seconds, traceKey, type TraceEvent, type TraceKind } from "../trace";
+
+// The user as a live orb in the check's ink, its eyes in paper: the colors the user's pill had (index.css --color-ink
+// and --color-paper; the orb's shader takes hex).
+const ORB = { color: "#1f4d36", eyeColor: "#fcfcfa" };
 
 // Who calls whom, drawn as two tidy trees. You start a check (the Orchestrator calls six agents in order, then has Changes
 // dry-run the fixes it suggests) or ask a question (the Chat agent screens it, thinks with ASI:One and uses read-only
@@ -27,7 +32,7 @@ const VIEW_H = chatY(2) + 52;
 
 const agent = (id: string, role: string, y: number, kind: Kind = "agent"): MapNode => ({ id, label: id, role, x: AGENT.x, y, w: AGENT.w, h: AGENT.h, kind });
 const NODES: MapNode[] = [
-  { id: "you", label: "User", role: "The owner", x: 70, y: YOU_Y, w: 110, h: 58, kind: "you" },
+  { id: "you", label: "User", role: "The owner", x: 70, y: YOU_Y, w: 76, h: 76, kind: "you" },
   { id: "orchestrator", label: "Orchestrator", role: "Runs checks, suggests fixes", x: HUB.x, y: ORCH_Y, w: HUB.w, h: HUB.h, kind: "hub" },
   { id: "chat", label: "Chat agent", role: "Answers your questions", x: HUB.x, y: CHAT_Y, w: HUB.w, h: HUB.h, kind: "hub" },
   agent("Nessie", "Capital One's bank API", checkY(0)),
@@ -190,8 +195,10 @@ function Box({ n, s, now }: { n: MapNode; s: NodeState; now: number }) {
   if (n.kind === "you")
     return (
       <g>
-        <rect x={x} y={y} width={n.w} height={n.h} rx={n.h / 2} fill="var(--color-ink)" />
-        <text x={n.x} y={n.y + 7} textAnchor="middle" className="fill-paper font-display text-[22px] font-extrabold [font-stretch:80%]">
+        <foreignObject x={x} y={y} width={n.w} height={n.h}>
+          <LiveOrb variant="custom" color={ORB.color} eyeColor={ORB.eyeColor} size={n.w} label={`${n.label}: ${n.role.toLowerCase()}`} />
+        </foreignObject>
+        <text x={n.x} y={y + n.h + 24} textAnchor="middle" className="fill-ink font-display text-[22px] font-extrabold [font-stretch:80%]">
           {n.label}
         </text>
       </g>
