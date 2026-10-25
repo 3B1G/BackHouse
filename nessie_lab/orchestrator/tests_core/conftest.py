@@ -77,6 +77,9 @@ def make_root(tmp_path: Path) -> Path:
     con = sqlite3.connect(tmp_path / "data" / "books.db")
     con.execute(f"CREATE TABLE locations ({', '.join(HERE)})")
     con.execute(f"INSERT INTO locations VALUES ({', '.join('?' * len(HERE))})", list(HERE.values()))
+    con.execute("CREATE TABLE accounts (account, type, nickname, last4, opening_balance_cents INTEGER, opening_as_of)")
+    con.executemany("INSERT INTO accounts VALUES (?,?,?,?,?,?)",
+                    [(a, t, n.split(" |")[0], "0000", c, "2026-10-01") for a, _, t, n, c in ACCOUNTS])
     con.execute("CREATE TABLE menu_prices (item, course, channel, service, effective_from, price_cents)")
     con.executemany("INSERT INTO menu_prices VALUES (?,?,?,?,?,?)", MENU)
     con.executescript("""
