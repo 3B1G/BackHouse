@@ -115,7 +115,7 @@ async def traced_chat(self, messages, tools=None, deadline=None):
 llm.ASIClient.chat = traced_chat
 TAG = "boh-1loc"
 SUGGESTION = re.compile(r"^data/suggestions/(orch|review)-[A-Za-z0-9._-]{1,80}\.json$")
-OWNER_MODES = ("owner", "decide", "accept-verified", "setup", "commit", "approve")
+OWNER_MODES = ("owner", "decide", "accept-verified", "setup", "commit", "approve", "propose")
 
 
 def _db(role="reader"):
@@ -188,6 +188,14 @@ def owner(mode, session, args):
         return {**owner_status(session), "signed": signed["line"]}
     elif mode == "approve":
         return {**sign(args.get("file"), args.get("passphrase"), apply=True), "owner_key": True}
+    elif mode == "propose":                      # the owner's own price: forecast it, dry-run it, save it to approve
+        out = tools.call(session, "propose_fix", {"dish": str(args.get("dish") or ""),
+                                                  "new_price_cents": int(args.get("new_price_cents") or 0)})
+        if "error" in out:
+            raise ValueError(out["error"])
+        menu = next((e["result"] for e in reversed(session.log) if e["name"] == "get_menu" and "error" not in e["result"]),
+                    None) or tools.call(session, "get_menu", {})
+        return {"fix": out, "menu": menu}
     return owner_status(session)
 
 

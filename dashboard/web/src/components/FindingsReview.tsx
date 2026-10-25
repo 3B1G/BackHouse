@@ -57,6 +57,7 @@ export function FindingsReview({ review, onReview, onSigned }: { review: OwnerRe
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
+  const [showSigned, setShowSigned] = useState(false); // a signed review folds away, so the suggestions come up next
   const n = review.findings.length;
   const decided = review.findings.filter((f) => f.proposal).length;
   const agreed = review.batch?.finding_ids.length ?? 0;
@@ -100,11 +101,24 @@ export function FindingsReview({ review, onReview, onSigned }: { review: OwnerRe
           Accept all {agreed} the Verifier agreed with
         </button>
       )}
-      <ol className="mt-4 space-y-3">
-        {review.findings.map((f) => (
-          <FindingCard key={f.finding_id} f={f} locked={locked} busy={busy} onDecide={(d) => act(() => owner.decide(f.finding_id, d))} />
-        ))}
-      </ol>
+      {locked && (
+        <button
+          type="button"
+          aria-expanded={showSigned}
+          aria-controls="review-findings"
+          onClick={() => setShowSigned(!showSigned)}
+          className="mt-3 min-h-11 rounded-md px-3 text-[0.9375rem] font-bold text-ink underline underline-offset-4 hover:bg-check"
+        >
+          {showSigned ? "Hide the findings" : `Show the ${n} findings`}
+        </button>
+      )}
+      {(!locked || showSigned) && (
+        <ol id="review-findings" className="mt-4 space-y-3">
+          {review.findings.map((f) => (
+            <FindingCard key={f.finding_id} f={f} locked={locked} busy={busy} onDecide={(d) => act(() => owner.decide(f.finding_id, d))} />
+          ))}
+        </ol>
+      )}
       {error && (
         <p role="alert" className="mt-3 text-[0.9375rem] font-bold text-serial">
           {error}

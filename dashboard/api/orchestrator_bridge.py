@@ -30,7 +30,7 @@ MAX_LOG_LINES = 20
 DECLINED = Path(__file__).with_name("state") / "declined.json"
 OWNER_SAYS = {"decide": "Owner decided a finding", "accept-verified": "Owner accepted the verified findings",
               "setup": "Owner set up the owner passphrase", "commit": "Owner signed the review of the findings",
-              "approve": "Owner approved a change"}
+              "approve": "Owner approved a change", "propose": "Owner tried their own price"}
 
 
 class OrchestratorError(Exception):
@@ -98,7 +98,25 @@ def owner(mode, payload=None):
         span.fail(str(e)[:200])
         raise
     span.done((out.get("line") or out.get("signed") or "done")[:200])
+    if mode == "propose":                        # the dashboard shows it like any other suggestion
+        dishes = {d["item"]: d for d in (out.get("menu") or {}).get("dishes", [])}
+        return {"fix": fix_view(out["fix"], dishes)}
     return out
+
+
+def fix_view(fx, dishes):
+    """One propose_fix result as the dashboard's suggestion card shows it."""
+    s, vs = fx["suggestion"], (fx["forecast"].get("vs_base") or {})
+    dish = dishes.get(s.get("target")) or {}
+    return {
+        "id": s["suggestion_id"], "action": s["action"], "title": s["title"], "dish": s.get("target"),
+        "old_price_cents": fx.get("old_price_cents"), "new_price_cents": s.get("new_price_cents"),
+        "market_median_cents": fx.get("competitor_median_cents"), "price_cents": dish.get("price_cents"),
+        "food_cost_pct": dish.get("food_cost_pct"), "starts": (fx.get("planned_change") or {}).get("effective_from"),
+        "runout_before": s.get("run_out_likely_before"), "runout_after": s.get("run_out_likely_after"),
+        "days_later": vs.get("days_moved_average"), "monthly_cents": s.get("monthly_cash_effect_cents"),
+        "approve": fx["approve_command"], "file": fx["path"],
+    }
 
 
 def _key(fx):
@@ -130,21 +148,10 @@ def plan(brief):
     facts = brief["facts"]
     cash, bills, market = facts.get("cash") or {}, facts.get("bills") or {}, facts.get("market") or {}
     dishes = {d["item"]: d for d in (brief.get("menu") or {}).get("dishes", [])}
-    fixes, no = [], declined()
-    for fx in facts.get("fixes") or []:
-        s, vs = fx["suggestion"], (fx["forecast"].get("vs_base") or {})
-        if _key({"action": s["action"], "dish": s.get("target"), "new_price_cents": s.get("new_price_cents")}) in no:
-            continue
-        dish = dishes.get(s.get("target")) or {}
-        fixes.append({
-            "id": s["suggestion_id"], "action": s["action"], "title": s["title"], "dish": s.get("target"),
-            "old_price_cents": fx.get("old_price_cents"), "new_price_cents": s.get("new_price_cents"),
-            "market_median_cents": fx.get("competitor_median_cents"), "price_cents": dish.get("price_cents"),
-            "food_cost_pct": dish.get("food_cost_pct"), "starts": (fx.get("planned_change") or {}).get("effective_from"),
-            "runout_before": s.get("run_out_likely_before"), "runout_after": s.get("run_out_likely_after"),
-            "days_later": vs.get("days_moved_average"), "monthly_cents": s.get("monthly_cash_effect_cents"),
-            "approve": fx["approve_command"], "file": fx["path"],
-        })
+    no = declined()
+    fixes = [fix_view(fx, dishes) for fx in facts.get("fixes") or []
+             if _key({"action": fx["suggestion"]["action"], "dish": fx["suggestion"].get("target"),
+                      "new_price_cents": fx["suggestion"].get("new_price_cents")}) not in no]
     fields = ("our_item", "our_price_cents", "competitor_median_cents", "competitor_low_cents", "competitor_high_cents",
               "n_prices", "position", "gap_pct")
     stage = facts.get("stage") or {}              # Audit > Review > Commit > Forecast > Suggest: fixes only in Suggest

@@ -92,9 +92,10 @@ def start_run(req: RunRequest):
 @app.get("/api/runs/{run_id}/events")
 def run_events(run_id: str):
     run = pipeline.RUNS.get(run_id)
-    if run is None:
+    events = None if run else pipeline.saved(run_id)              # after an API restart, a finished check from disk
+    if run is None and events is None:
         raise HTTPException(404, "That check isn't running anymore. Start a new one.")
-    return StreamingResponse(run.stream(), media_type="text/event-stream",
+    return StreamingResponse(run.stream() if run else pipeline.replay(events), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
@@ -133,6 +134,11 @@ class Passphrase(BaseModel):
 class Approval(BaseModel):
     file: str
     passphrase: str
+
+
+class OwnPrice(BaseModel):
+    dish: str
+    new_price_cents: int
 
 
 class Decline(BaseModel):
@@ -181,6 +187,12 @@ def owner_commit(p: Passphrase):
 def owner_approve(a: Approval):
     """Signs one suggestion with the owner key and has Changes apply it to the cost/price database."""
     return _owner("approve", a.model_dump())
+
+
+@app.post("/api/owner/propose")
+def owner_propose(p: OwnPrice):
+    """The owner's own price for a dish: the orchestrator forecasts it and Changes dry-runs it, ready to approve."""
+    return _owner("propose", p.model_dump())
 
 
 @app.post("/api/owner/decline")

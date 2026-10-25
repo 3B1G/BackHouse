@@ -8,6 +8,7 @@ import json
 import re
 import sqlite3
 from datetime import date, datetime, timedelta
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 import requests
@@ -51,6 +52,18 @@ MENU_CHANGE = {
     }},
 }
 
+OPEN_CHANGE = {
+    "name": "open_change",
+    "description": "Give the owner a button to one menu change on the dashboard, where they set their own price, approve it "
+                   "or decline it. Call it whenever the owner asks you to approve, decline or change a suggested change, or "
+                   "to set a dish's price: you can't do any of those yourself.",
+    "input_schema": {"type": "object", "additionalProperties": False, "required": ["dish"], "properties": {
+        "dish": {"type": "string", "description": "The dish, exactly as on the menu, e.g. Funghi Pizza"},
+        "price": {"type": "number", "description": "The price the owner wants, in dollars, if they named one"},
+    }},
+}
+DISH = re.compile(r"^[A-Za-z0-9 &'(),.-]{1,80}$")
+
 LABELS = {
     "get_bank_transaction": "Opening a bank transaction",
     "search_bank_transactions": "Searching the bank",
@@ -65,6 +78,7 @@ LABELS = {
     "get_delivery_payouts": "Checking delivery payouts",
     "run_what_if": "Running a what-if on 1,000 futures",
     "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
+    "open_change": "Finding that change on your dashboard",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
 
@@ -75,7 +89,7 @@ class ChatError(Exception):
 
 def _functions():
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE]]
+            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE]]
 
 
 def _paydays(f):
@@ -123,6 +137,21 @@ def _menu_change(args, cid=None):
             "monthly_cash_effect_cents": fc.get("monthly_cash_effect_cents"), "cash_change_cents": vs.get("cash_change_cents")}
 
 
+def _open_change(args):
+    """A button to that dish's change on the dashboard, with the owner's price filled in. It changes nothing."""
+    dish = str(args.get("dish") or "").strip()
+    if not DISH.fullmatch(dish):
+        return {"error": "Name the dish as it is on the menu."}
+    cents = round(float(args["price"]) * 100) if args.get("price") is not None else None
+    if cents is not None and not 0 < cents < 100_000:
+        return {"error": "That price doesn't look right."}
+    query = {"change": dish, **({"price": cents} if cents else {})}
+    label = f"Set {dish} to ${cents / 100:,.2f} on the dashboard" if cents else f"Open the {dish} change on the dashboard"
+    return {"link": {"label": label, "href": f"#/?{urlencode(query)}"},
+            "note": "Nothing has changed. Tell the owner you can't approve or change it yourself, and that the button under "
+                    "your answer takes them to it on the dashboard, where they set the price and approve or decline it."}
+
+
 def _size(out):
     """A one-line summary of a tool result for the developer page."""
     if "error" in out:
@@ -148,6 +177,11 @@ def _run_tool(name, raw_args, cid=None):
             out = _menu_change(args, cid)
         except (ValueError, TypeError) as e:
             out = {"error": f"That menu change didn't work: {str(e).splitlines()[0][:160]}"}
+    elif name == "open_change":
+        try:
+            out = _open_change(args)
+        except (ValueError, TypeError):
+            out = {"error": "That price doesn't look right."}
     else:
         out = T.call_tool(name, args)
     (span.fail if "error" in out else span.done)(_size(out))
@@ -185,8 +219,10 @@ How to answer:
 - Look things up with the tools. Never guess a number: every number you give comes from the facts above or a tool result.
 - Tool amounts are in cents. Convert them to dollars.
 - Search with a date window when you look for an amount: a supplier's bills can have similar amounts months apart.
-- You can't change anything: no payments, emails or edits. If the owner asks for an action, say what you'd suggest and that
-  they approve it on the dashboard.
+- You can't change anything: no payments, emails, edits or approvals. When the owner asks you to approve, decline or change
+  a suggested change, or to set a dish's price, say in one sentence that you can't do it yourself, and call open_change
+  with the dish (and their price, if they named one): they get a button to that change on the dashboard, where they set
+  the price and approve or decline it. Never describe dashboard screens or steps from memory.
 - Lead with the answer. Keep it to 2 to 5 short sentences, and use a short bullet list only for several items.
 - Name where a number came from (the bank, your records, the forecast) when it matters.
 - Write dates like "June 25, 2027", never as 2027-06-25.
@@ -266,12 +302,13 @@ def _needs_data(missing):
                        "below, and I'll answer your question as soon as they're in.")
 
 
-def _reply(text, sources):
-    """The answer event. An answer with code in it is off topic by definition here, so it is swapped for the refusal."""
+def _reply(text, sources, links=()):
+    """The answer event, with any buttons open_change made. An answer with code in it is off topic by definition here,
+    so it is swapped for the refusal."""
     text = (text or "").strip()
     if CODE.search(text):
         return _event(type="answer", text=OFF_TOPIC, sources=[], off_topic=True)
-    return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)))
+    return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)), links=list(links)[:3])
 
 
 def answer(history):
@@ -281,7 +318,7 @@ def answer(history):
     if not clean or clean[-1]["role"] != "user":
         yield _event(type="error", text="Ask a question about your books.")
         return
-    sources, cid = [], f"chat-{uuid.uuid4().hex[:6]}"
+    sources, links, cid = [], [], f"chat-{uuid.uuid4().hex[:6]}"
     ready = readiness()
     if not ready["ready"]:                           # no data yet: no model call, just ask for it
         tracelog.emit("Chat", "done", f"Waiting for data ({', '.join(ready['missing'])}): asked the owner to add it", cid)
@@ -300,19 +337,21 @@ def answer(history):
             calls = msg.get("tool_calls") or []
             if not calls:
                 tracelog.emit("Chat", "done", f"Answered from {len(set(sources))} sources", cid)
-                yield _reply(msg.get("content"), sources)
+                yield _reply(msg.get("content"), sources, links)
                 return
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for c in calls:
                 name = c["function"]["name"]
                 args, out = _run_tool(name, c["function"].get("arguments"), cid)
                 yield _event(type="tool", text=_label(name, args))
-                if "error" not in out:
+                if name == "open_change" and "link" in out and out["link"] not in links:
+                    links.append(out["link"])
+                elif "error" not in out:
                     sources.append(_source(name, args))
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]})
         msg = _ask(messages + [{"role": "user", "content": "Answer now with what you have found."}], None, cid=cid)
         tracelog.emit("Chat", "done", f"Answered after {MAX_ROUNDS} rounds of lookups", cid)
-        yield _reply(msg.get("content"), sources)
+        yield _reply(msg.get("content"), sources, links)
     except ChatError as e:
         tracelog.emit("Chat", "error", str(e), cid)
         yield _event(type="error", text=str(e))

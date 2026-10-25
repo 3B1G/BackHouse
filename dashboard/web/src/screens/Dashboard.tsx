@@ -14,7 +14,7 @@ import {
   type StepId,
 } from "../api";
 import { AgentsPanel } from "../components/AgentsPanel";
-import { ChangesSection } from "../components/ChangesSection";
+import { ChangesSection, type Focus } from "../components/ChangesSection";
 import { FindingsReview } from "../components/FindingsReview";
 import { Hero } from "../components/Hero";
 import { TrendPanel } from "../components/TrendPanel";
@@ -29,6 +29,12 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
   const [steps, setSteps] = useState<Partial<Record<StepId, StepEvent>>>({});
   const [findings, setFindings] = useState<Finding[]>([]);
   const [plan, setPlan] = useState<Plan | null>(null);
+  // The Chat's buttons arrive as #/?change=<dish>&price=<cents>: that change, scrolled to, with the owner's price in it.
+  const [focus] = useState<Focus | null>(() => {
+    const q = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const dish = q.get("change");
+    return dish ? { dish, price: Number(q.get("price")) || null } : null;
+  });
   const [review, setReview] = useState<OwnerReview | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [finished, setFinished] = useState(false);
@@ -50,17 +56,24 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
     setShown(null);
     setScenarios(null);
     setSelected([]);
+    let started: number | null = null;
     return followRun(
       runId,
       (e) => {
-        if (e.type === "run") onRestaurant(e.restaurant);
-        else if (e.type === "step") {
+        if (e.type === "run") {
+          onRestaurant(e.restaurant);
+          started = e.started_at ?? null;
+        } else if (e.type === "step") {
           setSteps((s) => ({ ...s, [e.step]: e }));
           if (e.forecast) setShown(e.forecast);
         } else if (e.type === "finding") setFindings((f) => [...f, e.finding]);
         else if (e.type === "plan") setPlan(e.plan);
-        else if (e.type === "done") setFinished(true);
-        else if (e.type === "error") setFailed(`${e.text}. Nothing was changed.`);
+        else if (e.type === "done") {
+          setFinished(true);
+          // A check that finished a while ago (back from the Chat, or the API restarted): the owner may have signed,
+          // approved or declined since, so ask the orchestrator for its suggestions as they are now.
+          if (started && Date.now() / 1000 - started - e.t > 5 && !focus) refreshPlan();
+        } else if (e.type === "error") setFailed(`${e.text}. Nothing was changed.`);
       },
       () => setFailed("Lost the connection to the check. Start it again to see fresh results."),
     );
@@ -83,6 +96,11 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
       .then(setPlan)
       .catch((err) => setPlanError((err as Error).message));
   };
+
+  // Arriving from the Chat: the latest suggestions, even when the check that made them is gone.
+  useEffect(() => {
+    if (focus) refreshPlan();
+  }, [focus]);
 
   // The what-if menu comes with each scenario's own effect, so it loads once the forecast exists.
   const haveForecast = shown !== null;
@@ -193,6 +211,7 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "forecas
             started={!!runId}
             ownerKey={review?.owner_key ?? false}
             onOwnerKey={() => setReview((r) => (r ? { ...r, owner_key: true } : r))}
+            focus={focus}
           />
           {planError && (
             <p role="alert" className="-mt-8 text-[0.9375rem] font-bold text-serial">

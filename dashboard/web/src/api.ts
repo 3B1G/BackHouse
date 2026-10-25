@@ -106,7 +106,7 @@ export type Plan = {
 };
 
 export type RunEvent =
-  | { type: "run"; restaurant: string; t: number }
+  | { type: "run"; restaurant: string; t: number; started_at?: number }
   | StepEvent
   | { type: "finding"; finding: Finding; t: number }
   | { type: "plan"; plan: Plan; t: number }
@@ -155,6 +155,8 @@ export const owner = {
   setup: (passphrase: string) => post<OwnerReview>("/api/owner/setup", { passphrase }),
   commit: (passphrase: string) => post<OwnerReview>("/api/owner/commit", { passphrase }),
   approve: (file: string, passphrase: string) => post<Approved>("/api/owner/approve", { file, passphrase }),
+  /** The owner's own price: forecast and dry-run, returned as a suggestion to approve. */
+  propose: (dish: string, new_price_cents: number) => post<{ fix: Fix }>("/api/owner/propose", { dish, new_price_cents }),
   decline: (fx: Fix) => post<{ ok: boolean }>("/api/owner/decline", { id: fx.id, action: fx.action, dish: fx.dish, new_price_cents: fx.new_price_cents, title: fx.title }),
   plan: () => post<Plan>("/api/owner/plan"),
 };
@@ -192,9 +194,11 @@ export const api = {
 };
 
 export type ChatTurn = { role: "user" | "assistant"; content: string };
+/** A button under a Chat answer, to a change on the dashboard (the Chat can't approve anything itself). */
+export type ChatLink = { label: string; href: string };
 export type ChatEvent =
   | { type: "tool"; text: string }
-  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean }
+  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean; links?: ChatLink[] }
   /** Asked before any data is in: the chat holds the question and offers an upload or the sample books. */
   | { type: "needs_data"; text: string; missing: ("bank" | "records")[] }
   | { type: "error"; text: string };

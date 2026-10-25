@@ -1,11 +1,14 @@
-import { IconCheck, IconMessageCircle, IconX } from "@tabler/icons-react";
-import { useState } from "react";
+import { IconCheck, IconMessageCircle, IconPencil, IconX } from "@tabler/icons-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { owner, remember, type Fix, type Plan, type PricePosition, type StepEvent } from "../api";
 import { mediumDate, money, moneyExact } from "../format";
 import { OwnerDialog } from "./OwnerDialog";
 
 const pct = (share: number) => `${Math.round(Math.abs(share) * 100)}%`;
 const price = (cents: number) => (cents % 100 ? moneyExact(cents) : money(cents));
+
+/** A dish and price the owner arrived with (the Chat's "Set Funghi Pizza to $25 on the dashboard" button). */
+export type Focus = { dish: string; price: number | null };
 
 /** Why the orchestrator suggests a change, from the numbers it used. */
 function reason(fx: Fix, seen?: PricePosition) {
@@ -26,23 +29,121 @@ function askChat(fx: Fix, days: number | null) {
   window.location.hash = "#/chat";
 }
 
+/** The owner's own price for a dish: the orchestrator forecasts it and Changes dry-runs it, and the card shows the result. */
+function OwnPrice({ dish, start, auto, onFix, onCancel }: { dish: string; start: number | null; auto: boolean; onFix: (fx: Fix) => void; onCancel?: () => void }) {
+  const [value, setValue] = useState(start ? (start / 100).toFixed(2) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const ran = useRef(false);
+
+  const check = async (cents: number) => {
+    setBusy(true);
+    setError(null);
+    try {
+      onFix((await owner.propose(dish, cents)).fix);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Arriving from the Chat with a price: check it straight away, so the numbers are ready to approve.
+  useEffect(() => {
+    if (!auto || !start || ran.current) return;
+    ran.current = true;
+    void check(start);
+  }, [auto, start]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const cents = Math.round(parseFloat(value.replace(/[$,\s]/g, "")) * 100);
+    if (!Number.isFinite(cents) || cents <= 0) return setError("Enter a price, like 25.00.");
+    void check(cents);
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 rounded-md border-2 border-rule bg-paper p-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="text-sm font-bold text-ink">
+          Your price for {dish}
+          <span className="mt-1 flex items-center rounded-md border-2 border-rule bg-paper focus-within:border-ink">
+            <span aria-hidden="true" className="pl-3 text-pencil">
+              $
+            </span>
+            <input
+              inputMode="decimal"
+              autoFocus={!auto}
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              className="min-h-11 w-28 bg-transparent px-2 text-base text-carbon outline-none"
+            />
+          </span>
+        </label>
+        <button type="submit" disabled={busy} className="min-h-11 rounded-md bg-ink px-4 text-[0.9375rem] font-bold text-paper hover:bg-ink/90 disabled:opacity-60">
+          {busy ? "Checking…" : "Check this price"}
+        </button>
+        {onCancel && (
+          <button type="button" onClick={onCancel} className="min-h-11 rounded-md px-3 text-[0.9375rem] font-bold text-ink underline underline-offset-4 hover:bg-check">
+            Cancel
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-sm text-pencil">
+        The orchestrator forecasts your price and Changes dry-runs it; then you approve or decline it here. Up to 30% from today's price.
+      </p>
+      {error && (
+        <p role="alert" className="mt-2 text-sm font-bold text-serial">
+          {error}
+        </p>
+      )}
+    </form>
+  );
+}
+
 type Outcome = { kind: "approved"; line: string } | { kind: "declined" };
 
-/** One suggestion as a guest check: what it does to your cash, why, and the owner's three answers to it. */
-function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; seen?: PricePosition; ownerKey: boolean; onOwnerKey: () => void }) {
+/** One suggestion as a guest check: what it does to your cash, why, and the owner's answers to it: approve, decline,
+ * set their own price, or ask the Chat. */
+function FixCard({
+  fx,
+  n,
+  seen,
+  ownerKey,
+  onOwnerKey,
+  focus,
+}: {
+  fx: Fix;
+  n: number;
+  seen?: PricePosition;
+  ownerKey: boolean;
+  onOwnerKey: () => void;
+  focus?: Focus;
+}) {
+  const [current, setCurrent] = useState(fx); // the orchestrator's suggestion, or the owner's own price for the dish
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [approving, setApproving] = useState(false);
+  const [editing, setEditing] = useState(!!focus && fx.action === "reprice_item" && focus.price !== fx.new_price_cents);
   const [error, setError] = useState<string | null>(null);
-  const days = fx.days_later == null ? null : Math.round(fx.days_later);
+  const card = useRef<HTMLLIElement>(null);
+  const days = current.days_later == null ? null : Math.round(current.days_later);
   const why = reason(fx, seen);
-  const moved = fx.runout_before && fx.runout_after && fx.runout_after !== fx.runout_before ? [fx.runout_before, fx.runout_after] : null;
+  const own = current.id !== fx.id;
+  const moved =
+    current.runout_before && current.runout_after && current.runout_after !== current.runout_before ? [current.runout_before, current.runout_after] : null;
+
+  // Arriving from the Chat: bring the card into view, and again once the owner's price is checked (the page above it can
+  // grow meanwhile).
+  useEffect(() => {
+    if (focus) card.current?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+  }, [focus, current.id]);
 
   const approve = async (passphrase: string) => {
     if (!ownerKey) {
       await owner.setup(passphrase);
       onOwnerKey(); // the key exists from here on, even if approving fails
     }
-    const r = await owner.approve(fx.file, passphrase);
+    const r = await owner.approve(current.file, passphrase);
     if (r.applied && !r.applied.applied) throw new Error(r.applied.error ?? "Changes signed it but couldn't apply it.");
     setApproving(false);
     setOutcome({ kind: "approved", line: r.line });
@@ -51,7 +152,7 @@ function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; se
   const decline = async () => {
     setError(null);
     try {
-      await owner.decline(fx);
+      await owner.decline(current);
       setOutcome({ kind: "declined" });
     } catch (err) {
       setError((err as Error).message);
@@ -60,11 +161,17 @@ function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; se
 
   const button = "inline-flex min-h-11 items-center gap-1.5 rounded-md border-2 px-4 text-[0.9375rem] font-bold transition-colors duration-150";
   return (
-    <li className="stub rounded-md border-2 border-rule bg-paper shadow-[0_14px_24px_-20px_rgba(31,77,54,0.5)]">
+    <li
+      ref={card}
+      className={`stub scroll-mt-40 rounded-md border-2 bg-paper shadow-[0_14px_24px_-20px_rgba(31,77,54,0.5)] ${focus ? "border-ink ring-4 ring-check-deep" : "border-rule"}`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-2 px-5 pt-4">
         <div className="min-w-0">
-          <p className="font-display text-xl font-extrabold leading-none text-serial [font-stretch:66%]">No. {n}</p>
-          <h3 className="mt-1.5 font-display text-2xl font-extrabold leading-tight text-ink [font-stretch:80%]">{fx.title}</h3>
+          <p className="font-display text-xl font-extrabold leading-none text-serial [font-stretch:66%]">
+            No. {n}
+            {own && <span className="ml-2 align-middle font-sans text-sm font-bold text-ink [font-stretch:100%]">Your price</span>}
+          </p>
+          <h3 className="mt-1.5 font-display text-2xl font-extrabold leading-tight text-ink [font-stretch:80%]">{current.title}</h3>
         </div>
         {days != null && days > 0 && (
           <p className="sm:text-right">
@@ -76,11 +183,11 @@ function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; se
       <div className="space-y-1.5 px-5 pb-4 pt-3 text-[0.9375rem] text-carbon">
         <p>
           {days != null && days > 0 ? `Cash lasts about ${days} days longer on average` : "It helps your cash"}
-          {fx.monthly_cents ? `, and you keep about ${money(fx.monthly_cents)} more each month` : ""}.
+          {current.monthly_cents ? `, and you keep about ${money(current.monthly_cents)} more each month` : ""}.
           {moved && ` Likely out of cash ${mediumDate(moved[1])} instead of ${mediumDate(moved[0])}.`}
         </p>
         {why && <p>{why}</p>}
-        {fx.starts && <p className="text-pencil">Starts {mediumDate(fx.starts)} once you approve it.</p>}
+        {current.starts && <p className="text-pencil">Starts {mediumDate(current.starts)} once you approve it.</p>}
       </div>
       <div className="border-t-2 border-dashed border-rule bg-check/50 px-5 py-4" aria-live="polite">
         {outcome?.kind === "approved" ? (
@@ -104,11 +211,29 @@ function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; se
                 <IconX aria-hidden="true" size={18} />
                 Decline
               </button>
-              <button type="button" onClick={() => askChat(fx, days)} className={`${button} border-transparent text-ink underline underline-offset-4 hover:bg-check`}>
+              {current.action === "reprice_item" && current.dish && !editing && (
+                <button type="button" onClick={() => setEditing(true)} className={`${button} border-ink bg-paper text-ink hover:bg-check`}>
+                  <IconPencil aria-hidden="true" size={18} />
+                  Set your own price
+                </button>
+              )}
+              <button type="button" onClick={() => askChat(current, days)} className={`${button} border-transparent text-ink underline underline-offset-4 hover:bg-check`}>
                 <IconMessageCircle aria-hidden="true" size={18} />
                 Ask the Chat
               </button>
             </div>
+            {editing && current.dish && (
+              <OwnPrice
+                dish={current.dish}
+                start={focus?.price ?? current.new_price_cents}
+                auto={!!focus?.price && focus.price !== fx.new_price_cents}
+                onFix={(next) => {
+                  setCurrent(next);
+                  setEditing(false);
+                }}
+                onCancel={() => setEditing(false)}
+              />
+            )}
             <p className="mt-2 text-sm text-pencil">Approving asks for your owner passphrase, then the orchestrator has Changes update your menu.</p>
             {error && (
               <p role="alert" className="mt-2 text-sm font-bold text-serial">
@@ -121,7 +246,7 @@ function FixCard({ fx, n, seen, ownerKey, onOwnerKey }: { fx: Fix; n: number; se
       <OwnerDialog
         open={approving}
         title="Approve this change"
-        what={`${fx.title}${fx.starts ? `, from ${mediumDate(fx.starts)}` : ""}`}
+        what={`${current.title}${current.starts ? `, from ${mediumDate(current.starts)}` : ""}`}
         action="Approve and apply"
         setup={!ownerKey}
         onClose={() => setApproving(false)}
@@ -199,6 +324,7 @@ export function ChangesSection({
   started,
   ownerKey,
   onOwnerKey,
+  focus,
 }: {
   plan: Plan | null;
   market?: StepEvent;
@@ -206,16 +332,22 @@ export function ChangesSection({
   started: boolean;
   ownerKey: boolean;
   onOwnerKey: () => void;
+  focus?: Focus | null;
 }) {
+  // A dish the owner arrived with that has no open suggestion (approved already, or never suggested): their own price
+  // for it becomes a suggestion here, or the orchestrator says why it can't.
+  const [extra, setExtra] = useState<Fix | null>(null);
+  const fixes = [...(plan?.fixes ?? []), ...(extra ? [extra] : [])];
+  const orphan = !!focus && !!plan && plan.stage?.stage === "Suggest" && !fixes.some((fx) => fx.dish === focus.dish);
   const note = plan
-    ? plan.fixes.length
+    ? fixes.length || orphan
       ? null
       : plan.stage?.stage === "Audit"
         ? `The orchestrator suggests changes once the Bookkeeper has checked your books. ${plan.stage.why ?? ""}`
         : plan.stage?.stage && plan.stage.stage !== "Suggest"
           ? "The orchestrator suggests changes after you review the Bookkeeper's findings below and sign your review."
           : "Nothing the forecast supports right now. The orchestrator only suggests changes that keep your cash longer."
-    : !started
+    : !started && !focus
       ? "After a check, the orchestrator suggests changes here, each with what it does to your cash. Nothing changes until you approve it."
       : step?.state === "waiting"
         ? step.text
@@ -223,7 +355,9 @@ export function ChangesSection({
           ? "The orchestrator is weighing changes that help your cash."
           : market?.state === "working"
             ? "Market scout is comparing your prices with nearby restaurants' menus."
-            : "The orchestrator suggests changes once the forecast is ready.";
+            : focus
+              ? `Finding the ${focus.dish} change…`
+              : "The orchestrator suggests changes once the forecast is ready.";
   const seen = new Map((plan?.market?.positions ?? []).map((p) => [p.our_item, p]));
 
   return (
@@ -231,18 +365,33 @@ export function ChangesSection({
       <h2 id="changes-heading" className="font-display text-3xl font-extrabold text-ink [font-stretch:80%]">
         Changes to try
       </h2>
-      {plan && plan.fixes.length > 0 && (
-        <>
-          <p className="mt-2 max-w-[62ch] text-[1.0625rem] text-carbon">
-            The orchestrator forecast each change against your cash and nearby menu prices, and every one passed a dry run. Approve the ones you want: nothing
-            changes until you do.
-          </p>
-          <ol className="mt-5 space-y-5">
-            {plan.fixes.map((fx, i) => (
-              <FixCard key={fx.id} fx={fx} n={i + 1} seen={fx.dish ? seen.get(fx.dish) : undefined} ownerKey={ownerKey} onOwnerKey={onOwnerKey} />
-            ))}
-          </ol>
-        </>
+      {plan && fixes.length > 0 && (
+        <p className="mt-2 max-w-[62ch] text-[1.0625rem] text-carbon">
+          The orchestrator forecast each change against your cash and nearby menu prices, and every one passed a dry run. Approve the ones you want, set your own
+          price, or decline: nothing changes until you approve.
+        </p>
+      )}
+      {orphan && focus && (
+        <div className="mt-4 rounded-lg border-2 border-ink p-5">
+          <p className="text-[1.0625rem] font-bold text-ink">There's no open suggestion for {focus.dish} right now.</p>
+          <p className="mt-1 text-[0.9375rem] text-carbon">Try your own price: if the orchestrator can't take it (say, an approved change hasn't started yet), it says why.</p>
+          <OwnPrice dish={focus.dish} start={focus.price} auto={!!focus.price} onFix={setExtra} />
+        </div>
+      )}
+      {fixes.length > 0 && (
+        <ol className="mt-5 space-y-5">
+          {fixes.map((fx, i) => (
+            <FixCard
+              key={fx.id}
+              fx={fx}
+              n={i + 1}
+              seen={fx.dish ? seen.get(fx.dish) : undefined}
+              ownerKey={ownerKey}
+              onOwnerKey={onOwnerKey}
+              focus={focus && fx.dish === focus.dish ? focus : undefined}
+            />
+          ))}
+        </ol>
       )}
       {note && (
         <div className="mt-4 rounded-lg border-2 border-dashed border-rule p-6">
