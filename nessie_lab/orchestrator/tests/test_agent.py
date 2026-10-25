@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 from datetime import datetime, timezone
@@ -11,7 +12,8 @@ import httpx
 import pytest
 from uagents import Model
 from uagents_core.contrib.protocols.chat import (
-    ChatAcknowledgement, ChatMessage, EndSessionContent, MetadataContent, StartSessionContent, TextContent,
+    ChatAcknowledgement, ChatMessage, EndSessionContent, MetadataContent, Resource, ResourceContent, StartSessionContent,
+    TextContent,
 )
 from uagents_core.contrib.protocols.chat.cards import create_card_response_content, validate_card_payload_json
 
@@ -19,8 +21,8 @@ import fakes
 from orchestrator import agent as agent_mod
 from orchestrator import register
 from orchestrator.agent import (
-    NOTICE_PREFIX, AskRequest, LocalFirstResolver, Orchestrator, PeerDispatch, RateLimit, build_ask_handler,
-    build_protocol, parse_peers, review_card,
+    ATTACHED, NOTICE_PREFIX, AskRequest, LocalFirstResolver, Orchestrator, PeerDispatch, PeerReplies, RateLimit,
+    attached_files, build_ask_handler, build_protocol, fetch_report, parse_peers, review_card,
 )
 from orchestrator.turn import FOOTER
 
@@ -387,3 +389,89 @@ async def test_full_chat_with_save_click_never_approves(tripwire):
     assert "pending" in text_of(sent[-1])
     await send(svc, json.dumps({"action": "discard", "suggestion": fakes.SUGGESTION_PATH}))
     assert tripwire == []
+
+
+# ---------------------------------------------------------------- a report attached by a Bookkeeper on another machine
+ASSET = "3f2b8a1c-9d4e-4c7a-8b6f-1e2d3c4b5a69"
+BOOKKEEPER = "agent1qbookkeeper"
+REPORT = json.dumps({"findings": [], "summary": {}}).encode()
+
+
+def report_reply(uri=f"agent-storage://https://agentverse.ai/v1/storage/{ASSET}", attach=True):
+    """The Bookkeeper's reply to request orch-bk-1: its JSON naming the report, then (attach) the report itself."""
+    parts = [TextContent(type="text", text=json.dumps({"request_id": "orch-bk-1", "filename": "data/reports/R-1.json"}))]
+    if attach:
+        parts.append(ResourceContent(resource_id=uuid4(), resource=Resource(uri=uri, metadata={"filename": "R-1.json"})))
+    return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(),
+                       content=[*parts, EndSessionContent(type="end-session")])
+
+
+class Storage:
+    """Agentverse's file storage, as fetch_report downloads from it."""
+
+    def __init__(self, body=REPORT):
+        self.body, self.asked = body, []
+
+    def download(self, asset_id):
+        self.asked.append(asset_id)
+        return {"contents": base64.b64encode(self.body).decode(), "mime_type": "application/json"}
+
+
+def test_attached_files_keeps_only_agentverse_file_ids():
+    assert attached_files(report_reply()) == [{"asset_id": ASSET, "filename": "R-1.json"}]
+    for uri in ("https://evil.example/x", f"file:///etc/{ASSET}", "agent-storage://host/not-a-uuid"):
+        assert attached_files(report_reply(uri=uri)) == []                # no URL in a message is ever followed
+
+
+def test_fetch_report_saves_the_attached_report_under_the_replys_name(tmp_path):
+    reply, store = {"filename": "data/reports/R-1.json", ATTACHED: attached_files(report_reply())}, Storage()
+    assert fetch_report(tmp_path, reply, None, store=store) == "bookkeeper report R-1.json: fetched from Agentverse"
+    assert (tmp_path / "data/reports/R-1.json").read_bytes() == REPORT and store.asked == [ASSET]
+    assert reply == {"filename": "data/reports/R-1.json"}                 # the reply reads as before
+
+
+def test_fetch_report_leaves_a_report_already_here_alone(tmp_path):
+    (tmp_path / "data/reports").mkdir(parents=True)
+    (tmp_path / "data/reports/R-1.json").write_text("the Bookkeeper shares this machine")
+    store = Storage()
+    reply = {"filename": "data/reports/R-1.json", ATTACHED: attached_files(report_reply())}
+    assert fetch_report(tmp_path, reply, None, store=store) is None and store.asked == []
+    assert (tmp_path / "data/reports/R-1.json").read_text() == "the Bookkeeper shares this machine"
+
+
+@pytest.mark.parametrize("filename,body", [
+    ("data/reports/R-1.json", b"[1, 2]"),                                 # JSON, but not a report
+    ("data/reports/R-1.json", b"not json"),
+    ("../../outside.json", REPORT),                                       # never written outside data/reports
+    ("data/reports/../R-1.json", REPORT),
+])
+def test_fetch_report_saves_only_reports_and_only_in_data_reports(tmp_path, filename, body):
+    reply = {"filename": filename, ATTACHED: attached_files(report_reply())}
+    note = fetch_report(tmp_path, reply, None, store=Storage(body))
+    assert note is None or "not fetched" in note
+    assert not [p for p in tmp_path.rglob("*") if p.is_file()]
+
+
+async def test_ask_bookkeeper_saves_the_attached_report_before_answering(tmp_path, monkeypatch):
+    store = Storage()
+    monkeypatch.setattr("uagents_core.storage.ExternalStorage", lambda **kw: store)
+    replies, ctx = PeerReplies(), SimpleNamespace(send=AsyncMock())
+    d = PeerDispatch(ctx, bookkeeper=BOOKKEEPER, replies=replies, root=tmp_path, identity=None)
+    asking = asyncio.create_task(d.ask_bookkeeper({"request_id": "orch-bk-1"}, timeout=5))
+    for _ in range(3):
+        await asyncio.sleep(0)                                            # the request is out; the reply comes later
+    assert replies.deliver(BOOKKEEPER, report_reply())
+    assert await asking == ({"request_id": "orch-bk-1", "filename": "data/reports/R-1.json"}, "")
+    assert (tmp_path / "data/reports/R-1.json").read_bytes() == REPORT and store.asked == [ASSET]
+    assert d.notes == ["bookkeeper report R-1.json: fetched from Agentverse"]
+
+
+async def test_a_reply_without_an_attachment_reads_as_before(tmp_path):
+    replies, ctx = PeerReplies(), SimpleNamespace(send=AsyncMock())
+    d = PeerDispatch(ctx, bookkeeper=BOOKKEEPER, replies=replies, root=tmp_path)
+    asking = asyncio.create_task(d.ask_bookkeeper({"request_id": "orch-bk-1"}, timeout=5))
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert replies.deliver(BOOKKEEPER, report_reply(attach=False))
+    assert await asking == ({"request_id": "orch-bk-1", "filename": "data/reports/R-1.json"}, "")
+    assert d.notes == [] and not (tmp_path / "data").exists()

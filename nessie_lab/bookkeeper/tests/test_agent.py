@@ -1,4 +1,6 @@
 import json
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -7,11 +9,12 @@ import pytest
 from uagents import Model
 from uagents.registration import AlmanacApiRegistrationPolicy
 from uagents_core.identity import Identity
-from uagents_core.contrib.protocols.chat import ChatMessage, ChatAcknowledgement, EndSessionContent
+from uagents_core.contrib.protocols.chat import ChatMessage, ChatAcknowledgement, EndSessionContent, ResourceContent
 
+from bookkeeper import agent as agent_mod
 from bookkeeper.agent import (
-    ALMANAC_API_TIMEOUT, build_protocol, build_verifier_protocol, chat_message, connect_mailbox, mailbox_exists,
-    report_summary,
+    ALMANAC_API_TIMEOUT, attach_report, build_protocol, build_verifier_protocol, chat_message, connect_mailbox,
+    mailbox_exists, report_summary,
 )
 from bookkeeper.contracts import ReportRequest
 from bookkeeper.runner import Bookkeeper
@@ -258,3 +261,87 @@ async def test_started_knows_a_request_that_already_has_a_draft(root, draft):
     assert not service.started(request, "agent1-owner")
     await service.run(request, "agent1-owner")
     assert service.started(request, "agent1-owner") and not service.started(request, "agent1-someone-else")
+
+
+# ---------------------------------------------------------------- the report attached, for an orchestrator elsewhere
+ASSET = "3f2b8a1c-9d4e-4c7a-8b6f-1e2d3c4b5a69"     # Agentverse's asset ids are v4 UUIDs
+
+
+class Storage:
+    """Agentverse's file storage, as attach_report uses it."""
+    storage_url = "https://agentverse.example/v1/storage"
+
+    def __init__(self, fail=False):
+        self.fail, self.created, self.permissions = fail, [], []
+
+    def create_asset(self, name, content, mime_type="text/plain", lifetime_hours=24):
+        if self.fail:
+            raise RuntimeError("Asset creation failed: 503, try again later")
+        self.created.append((name, content, mime_type))
+        return ASSET
+
+    def set_permissions(self, asset_id, agent_address, read=True, write=True):
+        self.permissions.append((asset_id, agent_address, read, write))
+
+
+async def publish(bk_handler, root, draft):
+    """A request through the Bookkeeper and its Verifier: the reply the orchestrator finally gets."""
+    verifier_handler = handler_of(build_verifier_protocol(Verifier(root, ScriptedClient(draft)), BOOKKEEPER))
+    ctx = context()
+    await bk_handler(ctx, ORCHESTRATOR, chat_message(json.dumps({"request_id": "orchestrator-1"})))
+    verifier_ctx = context()
+    await verifier_handler(verifier_ctx, BOOKKEEPER, ctx.send.call_args_list[-1].args[1])
+    ctx = context()
+    await bk_handler(ctx, VERIFIER, verifier_ctx.send.call_args_list[-1].args[1])
+    return ctx.send.call_args_list[-1]
+
+
+def test_attach_report_uploads_the_report_for_the_requester_only(tmp_path):
+    (tmp_path / "data/reports").mkdir(parents=True)
+    (tmp_path / "data/reports/R-1.json").write_text('{"findings": []}')
+    store = Storage()
+    content = attach_report(tmp_path, "data/reports/R-1.json", ORCHESTRATOR, "token", store=store)
+    assert store.created == [("R-1.json", b'{"findings": []}', "application/json")]
+    assert store.permissions == [(ASSET, ORCHESTRATOR, True, False)]          # read only, and only for who asked
+    assert content.resource.uri == f"agent-storage://{store.storage_url}/{ASSET}" and str(content.resource_id) == ASSET
+    assert content.resource.metadata == {"mime_type": "application/json", "role": "bookkeeper-report",
+                                         "filename": "R-1.json"}
+
+
+async def test_a_published_report_goes_back_attached_and_still_named(root, draft):
+    store = Storage()
+    attach = partial(attach_report, root, token="token", store=store)
+    final = await publish(handler_of(build_protocol(Bookkeeper(root, ScriptedClient(draft)), VERIFIER,
+                                                    orchestrator=ORCHESTRATOR, attach=attach)), root, draft)
+    text, attached, end = final.args[1].content
+    assert final.args[0] == ORCHESTRATOR and isinstance(attached, ResourceContent) and isinstance(end, EndSessionContent)
+    body = json.loads(text.text)
+    assert body["verified"] is True and attached.resource.metadata["filename"] == Path(body["filename"]).name
+    assert store.created[0][1] == (root / body["filename"]).read_bytes() and store.permissions[0][1] == ORCHESTRATOR
+
+
+async def test_a_failed_upload_still_sends_the_named_report(root, draft):
+    attach = partial(attach_report, root, token="token", store=Storage(fail=True))
+    final = await publish(handler_of(build_protocol(Bookkeeper(root, ScriptedClient(draft)), VERIFIER,
+                                                    orchestrator=ORCHESTRATOR, attach=attach)), root, draft)
+    assert [type(part) for part in final.args[1].content][1:] == [EndSessionContent]
+    assert body_of(final)["verified"] is True and body_of(final)["filename"].startswith("data/reports/R-")
+
+
+@pytest.mark.parametrize("mailbox,token,attaches", [("true", "av-token", True), ("true", "", False),
+                                                    ("false", "av-token", False)])
+async def test_only_a_mailbox_bookkeeper_with_a_token_attaches_reports(tmp_path, monkeypatch, mailbox, token, attaches):
+    import uagents.asgi
+    monkeypatch.setattr(uagents.asgi, "HOST", uagents.asgi.HOST)     # a mailbox agent binds its server to loopback
+    seen, real = {}, agent_mod.build_protocol
+
+    def spy(*args):
+        seen["attach"] = args[4]
+        return real(*args)
+    monkeypatch.setattr(agent_mod, "build_protocol", spy)
+    for name, value in {"BOOKKEEPER_SEED": "bk-attach-test-seed", "VERIFIER_SEED": "verifier-attach-test-seed",
+                        "ORCHESTRATOR_SEED": "orchestrator-attach-test-seed", "BOOKKEEPER_MAILBOX": mailbox,
+                        "AGENTVERSE_TOKEN": token}.items():
+        monkeypatch.setenv(name, value)
+    agent_mod.make_agent(tmp_path, port=8011)
+    assert (seen["attach"] is not None) is attaches
