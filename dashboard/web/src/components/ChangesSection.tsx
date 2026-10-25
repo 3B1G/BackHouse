@@ -1,5 +1,5 @@
 import { IconCheck, IconMessageCircle, IconPencil, IconX } from "@tabler/icons-react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { owner, remember, type Fix, type Plan, type PricePosition, type StepEvent } from "../api";
 import { mediumDate, money, moneyExact } from "../format";
 import { OwnerDialog } from "./OwnerDialog";
@@ -9,6 +9,31 @@ const price = (cents: number) => (cents % 100 ? moneyExact(cents) : money(cents)
 
 /** A dish and price the owner arrived with (the Chat's "Set Funghi Pizza to $25 on the dashboard" button). */
 export type Focus = { dish: string; price: number | null };
+
+/** Brings `ref` to the middle of the screen and keeps it there while the page above it is still loading (the charts, the
+ * what-ifs and the review grow after it appears), until the owner scrolls, clicks or presses a key, or 6 seconds pass. */
+function useKeepInView(ref: RefObject<HTMLElement | null>, active: boolean, key?: unknown) {
+  useEffect(() => {
+    const el = ref.current;
+    if (!active || !el) return;
+    el.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+    let first = true; // observe() reports the current size at once: that isn't a change
+    const follow = new ResizeObserver(() => {
+      if (first) first = false;
+      else el.scrollIntoView({ block: "center" });
+    });
+    follow.observe(document.body);
+    const kinds = ["wheel", "touchstart", "keydown", "pointerdown"] as const;
+    const stop = () => {
+      follow.disconnect();
+      window.clearTimeout(timer);
+      kinds.forEach((k) => window.removeEventListener(k, stop));
+    };
+    const timer = window.setTimeout(stop, 6000);
+    kinds.forEach((k) => window.addEventListener(k, stop, { passive: true }));
+    return stop;
+  }, [ref, active, key]);
+}
 
 /** Why the orchestrator suggests a change, from the numbers it used. */
 function reason(fx: Fix, seen?: PricePosition) {
@@ -132,11 +157,8 @@ function FixCard({
   const moved =
     current.runout_before && current.runout_after && current.runout_after !== current.runout_before ? [current.runout_before, current.runout_after] : null;
 
-  // Arriving from the Chat: bring the card into view, and again once the owner's price is checked (the page above it can
-  // grow meanwhile).
-  useEffect(() => {
-    if (focus) card.current?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
-  }, [focus, current.id]);
+  // Arriving from the Chat: bring the card into view, and again once the owner's price is checked.
+  useKeepInView(card, !!focus, current.id);
 
   const approve = async (passphrase: string) => {
     if (!ownerKey) {
@@ -339,6 +361,8 @@ export function ChangesSection({
   const [extra, setExtra] = useState<Fix | null>(null);
   const fixes = [...(plan?.fixes ?? []), ...(extra ? [extra] : [])];
   const orphan = !!focus && !!plan && plan.stage?.stage === "Suggest" && !fixes.some((fx) => fx.dish === focus.dish);
+  const orphanBox = useRef<HTMLDivElement>(null);
+  useKeepInView(orphanBox, orphan);
   const note = plan
     ? fixes.length || orphan
       ? null
@@ -372,7 +396,7 @@ export function ChangesSection({
         </p>
       )}
       {orphan && focus && (
-        <div className="mt-4 rounded-lg border-2 border-ink p-5">
+        <div ref={orphanBox} className="mt-4 rounded-lg border-2 border-ink p-5">
           <p className="text-[1.0625rem] font-bold text-ink">There's no open suggestion for {focus.dish} right now.</p>
           <p className="mt-1 text-[0.9375rem] text-carbon">Try your own price: if the orchestrator can't take it (say, an approved change hasn't started yet), it says why.</p>
           <OwnPrice dish={focus.dish} start={focus.price} auto={!!focus.price} onFix={setExtra} />
@@ -382,7 +406,7 @@ export function ChangesSection({
         <ol className="mt-5 space-y-5">
           {fixes.map((fx, i) => (
             <FixCard
-              key={fx.id}
+              key={`${fx.id}|${fx.days_later}|${fx.monthly_cents}`} // a newer brief's numbers start the card over
               fx={fx}
               n={i + 1}
               seen={fx.dish ? seen.get(fx.dish) : undefined}
