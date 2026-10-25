@@ -37,7 +37,7 @@ const LATER_STEPS = [
   {
     id: "Changes",
     title: "You approve, and Changes carries it out",
-    what: "The only part that writes. It runs when you approve a suggestion at your terminal, with the owner passphrase.",
+    what: "The only part that writes. It runs when you approve a suggestion on the dashboard, with your owner passphrase.",
   },
 ];
 

@@ -3,16 +3,23 @@ orchestrator_bridge.py starts it:
 
     uv run --project nessie_lab/orchestrator python dashboard/api/orchestrator_driver.py brief
     uv run --project nessie_lab/orchestrator python dashboard/api/orchestrator_driver.py ask     (the question on stdin)
+    uv run --project nessie_lab/orchestrator python dashboard/api/orchestrator_driver.py scenario  (JSON on stdin)
+    uv run --project nessie_lab/orchestrator python dashboard/api/orchestrator_driver.py <owner action>  (JSON on stdin)
 
 It prints one JSON object per line: each tool call as it starts and as it returns, each ASI:One request, then the
-result. Nothing here approves or applies anything: the orchestrator only writes pending suggestions, which the owner
-approves at their own terminal.
+result. The orchestrator itself never approves anything. The owner actions are the dashboard's buttons, each the owner's
+own click: decide a finding, commit the review, set up the owner passphrase, approve a suggestion. Committing and
+approving sign with the owner key, which only the owner's passphrase unlocks, exactly as CH's `changes approve` does at
+a terminal. The passphrase arrives on stdin and is never printed.
 """
 import asyncio
 import json
+import os
+import re
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from orchestrator import llm, tools
@@ -20,7 +27,7 @@ from orchestrator.brief import brief
 from orchestrator.session import Session
 from orchestrator.turn import proposals, turn
 
-LAB = Path(__file__).resolve().parents[2] / "nessie_lab"
+LAB = Path(os.environ.get("BACKHOUSE_LAB") or Path(__file__).resolve().parents[2] / "nessie_lab")   # tests: a scratch copy
 _LOCK = threading.Lock()
 
 
@@ -106,6 +113,82 @@ async def traced_chat(self, messages, tools=None, deadline=None):
 
 
 llm.ASIClient.chat = traced_chat
+TAG = "boh-1loc"
+SUGGESTION = re.compile(r"^data/suggestions/(orch|review)-[A-Za-z0-9._-]{1,80}\.json$")
+OWNER_MODES = ("owner", "decide", "accept-verified", "setup", "commit", "approve")
+
+
+def _db(role="reader"):
+    from cost_price.db import connect
+
+    return connect(LAB / "data" / "cost_price.db", role)       # cost_price enforces each role with an SQLite authorizer
+
+
+def owner_status(session):
+    """The owner's review: the stage, every open finding with its decision so far, and whether the owner key exists."""
+    from cost_price.owner import fingerprint, public_key
+    from orchestrator import review, stages
+
+    out = review.status(session)
+    src = stages.source(session.root) or {}
+    full = {src["ids"][k]: f for k, f in (src.get("keys") or {}).items()}
+    for f in out["findings"]:
+        x = full.get(f["finding_id"]) or {}
+        dates = x.get("dates") or {}
+        f.update(explanation=x.get("explanation"), suggested_action=x.get("suggested_action"),
+                 first=dates.get("first"), last=dates.get("last"), recoverable=x.get("recoverable"))
+    with _db() as con:
+        pub = public_key(con)
+    return {**out, "owner_key": pub is not None, "fingerprint": fingerprint(pub) if pub else None}
+
+
+def sign(rel, passphrase, apply):
+    """What `changes approve <file> [--apply --live]` does, with the passphrase the owner typed in the dashboard:
+    unlock the owner key, plan the change fresh, sign exactly what was planned, then (for a change) apply it."""
+    from changes.cli import load_suggestion, question
+    from changes.executor import Executor, subject_id
+    from changes.shared import Approval
+    from cost_price.owner import unlock
+
+    if not SUGGESTION.fullmatch(str(rel)):
+        raise ValueError("that isn't a suggestion file")
+    subject = load_suggestion(LAB / rel)
+    with _db() as con:
+        key = unlock(con, str(passphrase or ""))
+    ex = Executor(LAB, key, tag=TAG)
+    shown, ops = ex.plan(subject)
+    line = question(shown, ops, ex.today)
+    ex.record_approval(subject, Approval(suggestion_id=subject_id(subject), decision="approved",
+                                         decided_at=datetime.now(timezone.utc), note="approved in the BackHouse dashboard"),
+                       shown=shown)
+    out = {"line": line, "applied": None}
+    if apply:
+        out["applied"] = ex.apply(subject, live=True).model_dump(mode="json")
+    return out
+
+
+def owner(mode, session, args):
+    from orchestrator import review
+
+    if mode == "decide":
+        review.propose(session, str(args.get("finding")), str(args.get("decision")), by="owner_ui")
+    elif mode == "accept-verified":
+        review.accept_verified_errors(session, by="owner_ui")
+    elif mode == "setup":
+        from cost_price.owner import init_owner, public_key
+
+        with _db("owner") as con:
+            if public_key(con):
+                raise ValueError("the owner passphrase is already set up")
+            init_owner(con, str(args.get("passphrase") or ""))
+    elif mode == "commit":
+        prepared = review.prepare(session)
+        signed = sign(prepared["suggestion_file"], args.get("passphrase"), apply=False)   # signs the review, applies nothing
+        tools.call(session, "forecast_base", {})           # the base forecast under these decisions: Suggest opens
+        return {**owner_status(session), "signed": signed["line"]}
+    elif mode == "approve":
+        return {**sign(args.get("file"), args.get("passphrase"), apply=True), "owner_key": True}
+    return owner_status(session)
 
 
 def main():
@@ -120,10 +203,14 @@ def main():
         elif mode == "ask":
             out = asyncio.run(turn(session, sys.stdin.read()))
             emit(kind="done", **out, proposals=proposals(session))
+        elif mode == "scenario":                 # one what-if on the Forecaster's 1,000 futures, for the Chat
+            emit(kind="done", **tools.call(session, "forecast_scenario", {"scenario": json.loads(sys.stdin.read() or "{}")}))
+        elif mode in OWNER_MODES:
+            emit(kind="done", **owner(mode, session, json.loads(sys.stdin.read() or "{}")))
         else:
             raise ValueError(f"unknown mode {mode!r}")
-    except Exception as exc:
-        emit(kind="error", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+    except Exception as exc:                     # messages name what went wrong, never the passphrase
+        emit(kind="error", error=str(exc)[:300] or type(exc).__name__, type=type(exc).__name__)
         sys.exit(1)
 
 

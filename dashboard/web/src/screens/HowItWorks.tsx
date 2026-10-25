@@ -15,7 +15,7 @@ function live(steps: Steps, id: StepId, running: boolean): Pick<TicketStep, "sta
 
 export function HowItWorks({ steps, running, plan }: { steps: Steps; running: boolean; plan: Plan | null }) {
   // Every check runs stage 1, "what is going on?", then the orchestrator's half of stage 2, "what do we do about it?".
-  // The rest of stage 2 is the owner's: approving a change at the terminal is what lets Changes carry it out.
+  // The rest of stage 2 is the owner's: approving a change, with the owner passphrase, is what lets Changes carry it out.
   const waiting = plan?.fixes.length ?? 0;
   const first: TicketStep[] = [
     {
@@ -73,7 +73,7 @@ export function HowItWorks({ steps, running, plan }: { steps: Steps; running: bo
       title: "You approve, and Changes carries it out",
       agent: "Changes",
       uses: "Plain code, no AI",
-      description: "It dry-runs every suggestion first. Nothing happens until you approve one at your terminal; then it changes the price or the menu, and logs what it did.",
+      description: "It dry-runs every suggestion first. Nothing happens until you approve one with your owner passphrase; then it changes the price or the menu, and logs what it did.",
       status: waiting
         ? `${waiting} suggested change${waiting === 1 ? "" : "s"} passed the dry run and wait${waiting === 1 ? "s" : ""} for you on the dashboard`
         : "Waits for a suggestion you approve",

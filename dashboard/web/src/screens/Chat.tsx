@@ -66,6 +66,21 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
     remember("boh-chat", JSON.stringify(messages));
   }, [messages]);
 
+  // "Ask the Chat" on a suggestion arrives with the suggestion already typed; the owner finishes the question.
+  useEffect(() => {
+    const started = recall("boh-chat-draft");
+    if (!started) return;
+    remember("boh-chat-draft", null);
+    setDraft(started);
+    requestAnimationFrame(() => {
+      const box = input.current;
+      if (!box) return;
+      grow(box);
+      box.focus();
+      box.setSelectionRange(started.length, started.length);
+    });
+  }, []);
+
   useEffect(() => {
     if (!messages.length && !busy) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
