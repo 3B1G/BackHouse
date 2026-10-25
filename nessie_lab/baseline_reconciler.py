@@ -1,4 +1,6 @@
-"""Rule-based Bookkeeper baseline: books + bank feed -> data/flags_baseline.json. Never reads data/grader/.
+"""Rule-based Bookkeeper baseline: books + bank -> data/flags_baseline.json. Never reads data/grader/.
+
+The bank is the Nessie copy (data/nessie_sync_<tag>.db, via features.load_bank()); without it, bank_feed.csv with a warning.
 
 Rebuilds what the bank should show from source documents, matches it to bank rows, then flags:
   missing     expected from the books, never hit the bank
@@ -10,6 +12,8 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
+
+from features import load_bank
 
 D = Path(__file__).parent / "data"
 MATERIALITY = 1000                                     # cents
@@ -29,8 +33,9 @@ for df in B.values():
     for c in df.columns:
         if c in ("date", "due", "issued", "debited") or c.endswith("_date") or c == "batch_date":
             df[c] = pd.to_datetime(df[c]).dt.date
-bank = pd.read_csv(D / "bank_feed.csv", parse_dates=["date"])
-bank["date"] = bank.date.dt.date
+bank, BANK_SOURCE = load_bank()
+bank["date"] = pd.to_datetime(bank.date).dt.date
+bank = bank.sort_values(["date", "account", "nessie_type", "amount", "bank_id"]).reset_index(drop=True)   # same order whatever the source
 start, end = bank.date.min(), bank.date.max()
 pct, fixed = 0.026, 15                                 # from agreements: "2.6% + 15c per card transaction"
 assert "2.6%" in B["agreements"].terms[0]
@@ -118,5 +123,6 @@ for i, e in E[~E.index.isin(match)].iterrows():
 for r in bank[~bank.bank_id.isin(used)].itertuples():
     flags.append(dict(type="unexpected", bank_id=r.bank_id, books_ref=None, expected=0, actual=int(r.amount), memo=r.memo))
 (D / "flags_baseline.json").write_text(json.dumps(flags, indent=1, default=str))
+print(f"bank source: {BANK_SOURCE}")
 print(f"expected rows {len(E)}, bank rows {len(bank)}, matched {len(match)}; flags {len(flags)}:",
       pd.Series([f["type"] for f in flags]).value_counts().to_dict())
