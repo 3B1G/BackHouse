@@ -1,5 +1,5 @@
 // Adapted from "logo-cloud-2": logos in a ruled grid whose top and bottom lines run out to the page edges, with a plus
-// mark wherever its lines meet. BackHouse's version takes the logos as props, each with a heading and a line on what it
+// mark wherever its lines meet. Our version takes the logos as props, each with a heading and a line on what it
 // does here, and fits any count: stacked on phones, one row from 768px. The plus is Tabler's, the app's icon set, and is
 // sized in px so it stays centered on the 1px lines at any page text size.
 import { IconPlus } from "@tabler/icons-react";

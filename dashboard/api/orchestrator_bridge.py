@@ -1,4 +1,4 @@
-"""BackHouse's orchestrator (nessie_lab/orchestrator) for the dashboard: its brief closes every check.
+"""The orchestrator (nessie_lab/orchestrator) for the Hermes dashboard: its brief closes every check.
 
 The orchestrator has its own environment (uagents, the cost/price DB, Market scout and Changes), so it runs as a
 subprocess through uv with orchestrator_driver.py, and every call it makes streams to the developer page as it happens.

@@ -212,7 +212,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
               Start by adding your data
             </h2>
             <p className="mt-1 max-w-[58ch] text-[0.9375rem] text-pencil">
-              BackHouse answers from your bank and your records, so it needs both first. Then you can ask anything about your
+              Hermes answers from your bank and your records, so it needs both first. Then you can ask anything about your
               cash, bills and forecast.
             </p>
             <AddData title="Get started" onReady={(name) => onRestaurant?.(name)} />
@@ -254,7 +254,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
             <article key={i} className="max-w-[68ch]">
               <p className="mb-1.5 flex items-center gap-2 text-sm font-bold text-ink">
                 <CheckMark className="h-5 w-5 text-ink" />
-                BackHouse
+                Hermes
               </p>
               {m.failed ? (
                 <div>

@@ -1,4 +1,4 @@
-"""BackHouse dashboard API. Run from the repo root:
+"""Hermes dashboard API. Run from the repo root:
 
     uv run --project dashboard uvicorn main:app --app-dir dashboard/api --port 8000
 
@@ -26,7 +26,7 @@ import orchestrator_bridge
 import pipeline
 import tracelog
 
-app = FastAPI(title="BackHouse")
+app = FastAPI(title="Hermes")
 WEB = Path(__file__).resolve().parents[1] / "web" / "dist"
 NEEDED_TABLES = {"invoices", "invoice_lines", "vendor_bills", "payroll_runs", "pos_card_batches"}
 
