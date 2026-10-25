@@ -70,3 +70,20 @@ def test_current_repository_snapshot():
     assert s.call("search_bank_transactions", {})["total_matches"] == s.bank_rows
     assert s.call("search_costs", {})["total_matches"] > 0
     s.close()
+
+
+@pytest.mark.parametrize("manifest,warned", [(None, False), ("same", False), ("other", True), ("broken", True)])
+def test_manifest_mismatch_is_disclosed(root, manifest, warned):
+    from conftest import bank_rows
+    path = root / "data" / "nessie_manifest_boh-1loc.json"
+    if manifest == "broken":
+        path.write_text("not json")
+    elif manifest:
+        path.write_text(json.dumps({"tag": "boh-1loc", "tx": {f"T{i}": (i if manifest == "same" else f"other-{i}")
+                                                              for i, *_ in bank_rows()}}))
+    s = SnapshotTools(root, "boh-1loc", date(2026, 1, 10))
+    notes = [l for l in s.limitations if "nessie_manifest_boh-1loc.json" in l]
+    assert bool(notes) == warned
+    if manifest == "other":
+        assert notes[0].startswith("67 of 67 bank rows in this snapshot have Nessie ids that are not in the committed")
+    s.close()

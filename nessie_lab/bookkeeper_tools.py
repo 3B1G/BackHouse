@@ -68,14 +68,16 @@ def load_bank_frame():
 
 def bank_id_map():
     """{Nessie transaction id: bank_id}, for converting reports that name Nessie's own ids (contracts.from_bk_report).
-    Uses the Nessie sync when present, else the committed upload manifest (ids never change after the upload)."""
+    The union of the committed upload manifest and the local Nessie sync, so a report converts whichever Nessie load
+    it came from, as long as that load's ids are here; the sync wins on a clash."""
+    manifest = D / f"nessie_manifest_{TAG}.json"
+    if not BANK_DB.exists() and not manifest.exists():
+        raise FileNotFoundError(f"neither {BANK_DB.name} nor {manifest.name} exists: run python nessie_sync.py --tag {TAG}")
+    ids = {nid: bid for bid, nid in json.loads(manifest.read_text())["tx"].items()} if manifest.exists() else {}
     if BANK_DB.exists():
         bank = session().bank                     # legacy mode keeps both ids
-        return dict(zip(bank.nessie_id, bank.bank_id))
-    manifest = D / f"nessie_manifest_{TAG}.json"
-    if not manifest.exists():
-        raise FileNotFoundError(f"neither {BANK_DB.name} nor {manifest.name} exists: run python nessie_sync.py --tag {TAG}")
-    return {nid: bid for bid, nid in json.loads(manifest.read_text())["tx"].items()}
+        ids.update(zip(bank.nessie_id, bank.bank_id))
+    return ids
 
 
 def _tool_function(name):

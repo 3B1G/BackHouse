@@ -13,7 +13,8 @@ import httpx
 from pydantic import ValidationError
 
 from . import __version__
-from .batches import WRITE_INSTRUCTION, Batch, assemble_draft, batch_tools, opening_messages, plan_batches
+from .batches import (WRITE_INSTRUCTION, Batch, assemble_draft, bank_ids_in, batch_tools, drop_findings, opening_messages,
+                      plan_batches, problem_report)
 from .contracts import AgentInfo, BatchResult, Draft, Report, ReportRequest, ReportResult, Sources, Window
 from .tools import GROUP_OF, LEGACY_TOOL_GROUPS, TOOL_GROUPS, TOOLSET_VERSION, SnapshotTools, succeeded
 
@@ -124,6 +125,18 @@ def replay(initial_messages, events, group_of):
     return messages, used
 
 
+def seen_bank_ids(events):
+    """The bank rows this batch's tools returned, from its recorded events (works on a saved trace too)."""
+    return bank_ids_in([e["result"] for e in events if "result" in e])
+
+
+def checked(result, problems, batch, record):
+    """Drop the findings that would not survive the contracts hand-off; say so in the result and the trace."""
+    record["dropped_findings"] = [{"id": fid, "problems": p} for fid, p in problems.items()]
+    LOG.info("%s: left out %s finding(s) that break the hand-off rules", batch.id, len(problems))
+    return drop_findings(result, problems, batch)
+
+
 def parse_result(content):
     """A BatchResult from a reply, allowing a Markdown code fence around the JSON (investigation turns are free text)."""
     text = (content or "").strip()
@@ -155,12 +168,13 @@ class Bookkeeper:
         """Run one batch's conversation. Returns (BatchResult, None) or (None, reason it was not reviewed)."""
         tools, events = batch_tools(batch), record["events"]
         turns = self.max_turns or batch.max_turns
-        ready = False
+        ready, fix = False, ""
         for turn in range(turns):
             final = ready or turn == turns - 1
             if final:
-                messages.append({"role": "user", "content": WRITE_INSTRUCTION})
-                events.append({"turn": turn, "instruction": WRITE_INSTRUCTION})
+                instruction = WRITE_INSTRUCTION + fix
+                messages.append({"role": "user", "content": instruction})
+                events.append({"turn": turn, "instruction": instruction})
             elif turns > 3 and turn == turns - 2:
                 note = "One data-gathering turn remains for this batch, then its result is written. Finish soon."
                 messages.append({"role": "user", "content": note})
@@ -205,12 +219,23 @@ class Bookkeeper:
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result, default=str)})
                 continue
             try:
-                return parse_result(message.get("content")), None
+                result = parse_result(message.get("content"))
             except ValidationError:
                 if final:
                     return None, "its result did not match the BatchResult format"
                 messages.append({"role": "assistant", "content": message.get("content") or ""})
                 ready = True
+                continue
+            problems = problem_report(result, seen_bank_ids(events))
+            if not problems:
+                return result, None
+            if not final:              # an early result that breaks the hand-off rules: one corrected write, tools off
+                messages.append({"role": "assistant", "content": message.get("content") or ""})
+                fix = " Fix these problems in your result: " + "; ".join(
+                    f"finding {fid}: {', '.join(p)}" for fid, p in problems.items()) + "."
+                ready = True
+                continue
+            return checked(result, problems, batch, record), None
         return None, "its turn budget ran out"
 
     # ------------------------------------------------------------ publishing
@@ -388,6 +413,8 @@ class Bookkeeper:
                     record["events"].append({"turn": turn, "message": message, "usage": usage})
                     reason = "the model asked for tools while writing its result" if message.get("tool_calls") else None
                     result = None if reason else parse_result(message.get("content"))
+                    if result is not None and (problems := problem_report(result, seen_bank_ids(record["events"]))):
+                        result = checked(result, problems, batch_of(record), record)
                 except OutputTruncated as exc:
                     record["events"].append({"turn": turn, "truncated_message": exc.partial, "usage": exc.usage})
                     result, reason = None, "its result was cut off at the output limit"

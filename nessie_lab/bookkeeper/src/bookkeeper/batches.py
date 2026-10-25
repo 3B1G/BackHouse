@@ -40,6 +40,10 @@ with at most 20 representative bank_ids and state the full count in the explanat
 treatments must still list every erroneous row, and only those, never the legitimate matching payment. For
 needs_owner include assumption_if_unconfirmed. Cite actual bank and document refs; computed or search evidence
 describes the query and its result. coverage counts only this batch's bank rows.
+Every finding must: cite at least one evidence item; name at least one bank row (bank_ids) or document (books_refs);
+use only bank_id values that your tools returned; give an ongoing monthly_cents, a correct_to cents and an owed cents
+above zero; and, for an owed treatment, put the document still owed first in books_refs. Findings that break these
+rules cannot reach the owner's forecast and are left out of the report.
 When you have finished, reply with this batch's result and no tool calls: a JSON object matching the BatchResult
 schema below, no Markdown and no other text. Do not revise it afterwards. If you run out of turns, tools are disabled
 and you are asked for the result.
@@ -150,6 +154,59 @@ def opening_messages(batch, session, balances, limitations):
     if "get_account_balances" in batch.tools:
         context["balances"] = balances
     return [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, default=str)}]
+
+
+# ---------------------------------------------------------------- hand-off rules (contracts.from_bk_report)
+def bank_ids_in(obj, found=None):
+    """Every bank_id / bank_ids value inside tool results: the bank rows a batch actually saw."""
+    found = set() if found is None else found
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k == "bank_id" and isinstance(v, str):
+                found.add(v)
+            elif k == "bank_ids" and isinstance(v, list):
+                found.update(x for x in v if isinstance(x, str))
+            else:
+                bank_ids_in(v, found)
+    elif isinstance(obj, list):
+        for v in obj:
+            bank_ids_in(v, found)
+    return found
+
+
+def finding_problems(f, seen):
+    """Why a finding would not survive the hand-off to checks and the Forecaster (empty when it would)."""
+    problems, t = [], f.treatment
+    if not f.evidence:
+        problems.append("it cites no evidence")
+    if not f.bank_ids and not f.books_refs:
+        problems.append("it names no bank row or document")
+    if t.kind == "ongoing" and t.monthly_cents <= 0:
+        problems.append("its ongoing monthly_cents is not above zero")
+    if t.kind == "correct_to" and t.cents <= 0:
+        problems.append("its correct_to cents is not above zero")
+    if t.kind == "owed" and t.cents <= 0:
+        problems.append("its owed cents is not above zero")
+    if t.kind == "owed" and not f.books_refs:
+        problems.append("its owed treatment names no document in books_refs")
+    unseen = sorted((set(f.bank_ids) | _targets(f)) - seen)
+    if unseen:
+        problems.append(f"bank ids no tool returned in this batch: {', '.join(unseen[:5])}" + (" ..." if len(unseen) > 5 else ""))
+    return problems
+
+
+def problem_report(result, seen):
+    """{finding id: problems} for the findings in a BatchResult that break the hand-off rules."""
+    return {f.id: p for f in result.findings if (p := finding_problems(f, seen))}
+
+
+def drop_findings(result, problems, batch):
+    """The result without its rule-breaking findings, plus a limitation for each one left out."""
+    kept = [f for f in result.findings if f.id not in problems]
+    notes = [f"Left out a {batch.title} finding ({f.counterparty}, {f.root_cause}): {'; '.join(problems[f.id])}."
+             for f in result.findings if f.id in problems]
+    return BatchResult.model_validate(dict(result.model_dump(), findings=[f.model_dump() for f in kept],
+                                           limitations=result.limitations + notes))
 
 
 # ---------------------------------------------------------------- assembly

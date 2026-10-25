@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from bookkeeper.batches import MEMO_INDEX_ROWS, Batch, assemble_draft, memo_index, opening_messages, plan_batches
 from bookkeeper.bookkeeper_tools import ToolSession
 from bookkeeper.contracts import BatchResult
@@ -128,3 +130,42 @@ def test_summary_coverage_cleared_and_unreviewed():
 def test_empty_results_assemble_to_an_empty_draft():
     draft, _ = assemble_draft([(b("a"), result())], [], bank_rows=5)
     assert draft.findings == [] and draft.summary.total_impact_cents == 0 and draft.coverage.bank_rows_reviewed == 5
+
+
+# ---------------------------------------------------------------- hand-off rules
+def test_bank_ids_in_collects_nested_ids():
+    from bookkeeper.batches import bank_ids_in
+    results = [{"rows": [{"bank_id": "a", "bank_ids": ["b", "c"]}], "unmatched_deposits": [{"bank_id": "d"}]},
+               {"transaction": {"bank_id": "e"}, "same_amount_within_14_days": [{"bank_id": "f", "memo": "x"}]}, {"error": "no"}]
+    assert bank_ids_in(results) == set("abcdef")
+
+
+def _no_rows(raw):
+    raw.update(bank_ids=[], books_refs=[], treatment=dict(kind="ongoing", since="2026-08-01", monthly_cents=5))
+
+
+@pytest.mark.parametrize("edit,problem", [
+    (lambda raw: raw.update(evidence=[]), "cites no evidence"),
+    (_no_rows, "names no bank row or document"),
+    (lambda raw: raw.update(treatment=dict(kind="ongoing", since="2026-08-01", monthly_cents=0)), "monthly_cents is not above zero"),
+    (lambda raw: raw.update(treatment=dict(kind="correct_to", bank_id="a", cents=0)), "correct_to cents is not above zero"),
+    (lambda raw: raw.update(treatment=dict(kind="owed", cents=100, due="2026-10-24")), "names no document in books_refs"),
+    (lambda raw: raw.update(books_refs=["DOC-1"], treatment=dict(kind="owed", cents=0, due="2026-10-24")), "owed cents is not above zero"),
+    (lambda raw: raw.update(bank_ids=["zzz"]), "no tool returned in this batch: zzz"),
+    (lambda raw: raw.update(treatment=dict(kind="exclude", bank_ids=["a", "made-up"])), "no tool returned in this batch: made-up"),
+])
+def test_finding_problems_mirror_the_contracts_hand_off(edit, problem):
+    from bookkeeper.batches import finding_problems
+    from bookkeeper.contracts import Finding
+    raw = finding("F", kind="exclude")
+    edit(raw)
+    problems = finding_problems(Finding.model_validate(raw), seen={"a"})
+    assert any(problem in p for p in problems), problems
+
+
+def test_valid_findings_have_no_problems():
+    from bookkeeper.batches import finding_problems
+    from bookkeeper.contracts import Finding
+    for raw in [finding("A", kind="exclude"), finding("B", kind="ongoing"), finding("C", kind="correct_to"),
+                dict(finding("D", kind="owed", bank_ids=("a",)), books_refs=["DOC-1"])]:
+        assert finding_problems(Finding.model_validate(raw), seen={"a"}) == []

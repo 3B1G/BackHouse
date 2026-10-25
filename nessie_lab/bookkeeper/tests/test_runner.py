@@ -514,3 +514,61 @@ async def test_saved_reports_are_returned_unchanged(root, draft):
             raise AssertionError("a saved report must not be regenerated")
     assert await Bookkeeper(root, NeverCalled()).run(ReportRequest(request_id="keep")) == result
     assert (root / result.filename).read_bytes() == before
+
+
+def made_up(draft):
+    bad = json.loads(json.dumps(draft))
+    bad["findings"][0]["bank_ids"] = ["made-up-id"]
+    bad["findings"][0]["treatment"] = {"kind": "exclude", "bank_ids": ["made-up-id"]}
+    return bad
+
+
+async def test_early_result_breaking_hand_off_rules_gets_one_corrected_write(root, draft):
+    class FixesIt(ScriptedClient):
+        writes = []
+
+        async def complete(self, messages, tools):
+            if batch_of(messages) != "unrecorded_charges" or len(messages) == 2:
+                return await super().complete(messages, tools)
+            self.calls += 1
+            if tools:                                          # an early result citing a row no tool returned
+                return {"role": "assistant", "content": json.dumps(batch_result(made_up(self.draft)))}
+            self.writes.append(messages[-1]["content"])
+            return {"role": "assistant", "content": json.dumps(batch_result(self.draft))}
+    client = FixesIt(draft)
+    result = await Bookkeeper(root, client).run(ReportRequest(request_id="fix"))
+    [instruction] = client.writes
+    assert "Tools are now disabled" in instruction and "Fix these problems in your result: finding F1: bank ids no tool returned" in instruction
+    report = json.loads((root / result.filename).read_text())
+    assert report["findings"][0]["bank_ids"] == ["n2"] and not any(l.startswith("Left out") for l in report["limitations"])
+
+
+async def test_written_finding_breaking_hand_off_rules_is_left_out_and_disclosed(root, draft):
+    class StillWrong(ScriptedClient):
+        async def complete(self, messages, tools):
+            if batch_of(messages) == "unrecorded_charges" and len(messages) > 2:
+                self.calls += 1
+                both = made_up(self.draft)
+                both["findings"].append(json.loads(json.dumps(self.draft))["findings"][0] | {"id": "F2"})
+                return {"role": "assistant", "content": json.dumps(batch_result(both))}
+            return await super().complete(messages, tools)
+    result = await Bookkeeper(root, StillWrong(draft), max_turns=2).run(ReportRequest(request_id="drop"))
+    report = json.loads((root / result.filename).read_text())
+    assert [f["bank_ids"] for f in report["findings"]] == [["n2"]]          # the valid finding is kept
+    assert any(l.startswith("Left out a Charges with no supporting document finding (Supplier, unrecorded_charge): "
+                            "bank ids no tool returned in this batch: made-up-id") for l in report["limitations"])
+    record = next(b for b in trace_of(root, result)["batches"] if b["id"] == "unrecorded_charges")
+    assert record["dropped_findings"] == [{"id": "F1", "problems": ["bank ids no tool returned in this batch: made-up-id"]}]
+
+
+async def test_resume_applies_the_hand_off_rules(root, draft):
+    with pytest.raises(httpx.ReadTimeout) as failure:
+        await Bookkeeper(root, TimeoutAtWriting(draft)).run(ReportRequest(request_id="resume-rules"))
+
+    class WrongWriter:
+        async def complete(self, messages, tools):
+            return {"role": "assistant", "content": json.dumps(batch_result(made_up(draft)))}
+    result = await Bookkeeper(root, WrongWriter()).resume(failure.value.bookkeeper_trace_id)
+    report = json.loads((root / result.filename).read_text())
+    assert report["findings"] == [] and any(l.startswith("Left out a Charges with no supporting document finding")
+                                            for l in report["limitations"])
