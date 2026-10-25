@@ -37,15 +37,15 @@ How we know it works:
 - **Stage 1, "what is going on?":** the Bookkeeper and its verifier, the Forecaster, and the Market scout.
 - **Stage 2, "what do we do about it?":** the ASI orchestrator proposes, the owner approves, and CH applies.
 
-| Piece | Where | Owner |
-|---|---|---|
-| Simulated restaurant, Nessie load and sync, baseline reconciler, grader | `nessie_lab/` ([README](nessie_lab/README.md)) | Ankit |
-| The Book and the Bookkeeper tools; `contracts.py` (the shapes every piece hands to the next) | `nessie_lab/build_book.py`, `bookkeeper_tools.py`, `contracts.py` | Clovier |
-| Forecaster: Monte Carlo cash runway, scenarios, backtest | `nessie_lab/forecaster.py` | Paria |
-| Bookkeeper agent, verifier, ASI orchestrator and Controller | branch `bk` | Ravneet |
-| **Cost/price database**: menu prices, plate costs, competitor prices, signed approvals | `nessie_lab/cost_price/` ([README](nessie_lab/cost_price/README.md)) | Ankit |
-| **Market scout** (uAgent): below, at or above market per dish | `nessie_lab/market_scout/` ([README](nessie_lab/market_scout/README.md)) | Ankit |
-| **CH**: applies owner-signed changes to prices and Nessie bills | `nessie_lab/changes/` ([README](nessie_lab/changes/README.md)) | Ankit |
+| Piece | Where |
+|---|---|
+| Simulated restaurant, Nessie load and sync, baseline reconciler, grader | `nessie_lab/` ([README](nessie_lab/README.md)) |
+| The Book and the Bookkeeper tools; `contracts.py` (the shapes every piece hands to the next) | `nessie_lab/build_book.py`, `bookkeeper_tools.py`, `contracts.py` |
+| Forecaster: Monte Carlo cash runway, scenarios, backtest | `nessie_lab/forecaster.py` |
+| Bookkeeper agent, verifier, ASI orchestrator and Controller | branch `bk` |
+| **Cost/price database**: menu prices, plate costs, competitor prices, signed approvals | `nessie_lab/cost_price/` ([README](nessie_lab/cost_price/README.md)) |
+| **Market scout** (uAgent): below, at or above market per dish | `nessie_lab/market_scout/` ([README](nessie_lab/market_scout/README.md)) |
+| **CH**: applies owner-signed changes to prices and Nessie bills | `nessie_lab/changes/` ([README](nessie_lab/changes/README.md)) |
 
 ## Run it
 
