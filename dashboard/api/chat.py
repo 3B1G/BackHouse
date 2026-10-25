@@ -5,11 +5,12 @@ doing, then the answer and the sources it used. Nothing here can change data: ev
 """
 import json
 import re
+import sqlite3
 from datetime import date
 
 import requests
 
-from core import env_value
+from core import env_value, readiness
 import bookkeeper_tools as T
 import contracts as K
 import forecast
@@ -213,6 +214,14 @@ def _event(**e):
     return f"data: {json.dumps(e, default=str)}\n\n"
 
 
+def _needs_data(missing):
+    """Asked before any data is in: say what's needed instead of failing. The app holds the question, offers an upload or
+    the sample books, and asks it again once the data is in."""
+    return _event(type="needs_data", missing=missing,
+                  text="I need your bank and records before I can answer that. Connect your bank and upload your records "
+                       "below, and I'll answer your question as soon as they're in.")
+
+
 def _reply(text, sources):
     """The answer event. An answer with code in it is off topic by definition here, so it is swapped for the refusal."""
     text = (text or "").strip()
@@ -229,6 +238,11 @@ def answer(history):
         yield _event(type="error", text="Ask a question about your books.")
         return
     sources, cid = [], f"chat-{uuid.uuid4().hex[:6]}"
+    ready = readiness()
+    if not ready["ready"]:                           # no data yet: no model call, just ask for it
+        tracelog.emit("Chat", "done", f"Waiting for data ({', '.join(ready['missing'])}): asked the owner to add it", cid)
+        yield _needs_data(ready["missing"])
+        return
     try:
         tracelog.emit("Chat", "start", f"Question: {clean[-1]['content'][:200]}", cid)
         if not _in_scope(clean, cid):
@@ -258,5 +272,10 @@ def answer(history):
     except ChatError as e:
         tracelog.emit("Chat", "error", str(e), cid)
         yield _event(type="error", text=str(e))
+    except (sqlite3.OperationalError, FileNotFoundError) as e:
+        now = readiness()                            # data went missing mid-answer (e.g. a check rebuilding it)
+        tracelog.emit("Chat", "error", f"{type(e).__name__}: {str(e)[:160]}", cid)
+        yield _needs_data(now["missing"]) if not now["ready"] else _event(
+            type="error", text="Your data is being rebuilt by a check right now. Try again in a moment.")
     except Exception as e:                           # never leave the owner with a spinner
         yield _event(type="error", text=f"Something went wrong while answering ({type(e).__name__}). Try again.")
