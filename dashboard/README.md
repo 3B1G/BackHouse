@@ -1,6 +1,6 @@
-# BackHouse dashboard
+# Hermes dashboard
 
-The owner's view of BackHouse: a React app (`web/`) and the FastAPI server behind it (`api/`). The server runs the
+The owner's view of Hermes: a React app (`web/`) and the FastAPI server behind it (`api/`). The server runs the
 nessie_lab pipeline as a check, serves the forecast and what-ifs, and answers the Chat through ASI:One.
 
 ## Run it
@@ -41,7 +41,7 @@ http://127.0.0.1:8000.
 
 ## Pages
 
-- **Dashboard**: start a check, then see the cash forecast, try what-ifs, and see the sponsor tools BackHouse runs on.
+- **Dashboard**: start a check, then see the cash forecast, try what-ifs, and see the sponsor tools Hermes runs on.
 - **Forecast**: the charts, and what the forecast assumes.
 - **Chat**: questions about the books, answered by ASI:One with the Bookkeeper's 11 read-only tools.
 - **How it works**: each agent, in the order a check runs them.

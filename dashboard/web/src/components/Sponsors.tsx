@@ -1,6 +1,6 @@
 import { LogoCloud, type Logo } from "@/components/ui/logo-cloud-2";
 
-// The Cal Hacks 13.0 sponsors whose tools BackHouse runs on, each with the job it does here. The logos are saved in
+// The Cal Hacks 13.0 sponsors whose tools Hermes runs on, each with the job it does here. The logos are saved in
 // public/sponsors: Capital One's from Wikimedia Commons, Fetch.ai's and ASI:One's from fetch.ai.
 const SPONSORS: Logo[] = [
   {
@@ -41,7 +41,7 @@ export function Sponsors() {
           Built with our sponsors' tools
         </h2>
         <p className="mx-auto mt-2 max-w-[56ch] text-center text-[1.0625rem] text-pencil">
-          Capital One and Fetch.ai sponsor Cal Hacks 13.0. Here's where their tools run in BackHouse.
+          Capital One and Fetch.ai sponsor Cal Hacks 13.0. Here's where their tools run in Hermes.
         </p>
         <LogoCloud logos={SPONSORS} className="mt-10" />
       </div>

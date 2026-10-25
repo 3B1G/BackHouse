@@ -1,5 +1,5 @@
 // Adapted from "how-it-works": cards pinned to ruled paper, zig-zagging down the page, joined by a moving dashed line.
-// BackHouse's version: each step is a guest check clipped to the kitchen's ticket rail, numbered in red like a real
+// Our version: each step is a guest check clipped to the kitchen's ticket rail, numbered in red like a real
 // check, with Agent and Uses boxes, and a rubber stamp that lands as the step finishes. The line is drawn from where
 // the checks actually sit, so it follows any text length; below 1024px the checks stack and the line hides.
 import { LazyMotion, domAnimation, m, useReducedMotion } from "motion/react";

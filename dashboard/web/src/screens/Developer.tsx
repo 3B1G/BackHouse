@@ -373,7 +373,7 @@ async function savePdf(rows: TraceEvent[], scope: string) {
   doc.setFont("helvetica", "bold");
   doc.setFontSize(16);
   doc.setTextColor(31, 77, 54);
-  doc.text("BackHouse developer log", M, y + 10);
+  doc.text("Hermes developer log", M, y + 10);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
   doc.setTextColor(85, 96, 90);
@@ -419,7 +419,7 @@ async function savePdf(rows: TraceEvent[], scope: string) {
     });
     y += h;
   });
-  doc.save(`backhouse-log-${stamp()}.pdf`);
+  doc.save(`hermes-log-${stamp()}.pdf`);
 }
 
 function LiveLog({ events }: { events: TraceEvent[] }) {
@@ -444,7 +444,7 @@ function LiveLog({ events }: { events: TraceEvent[] }) {
       setSaving(false);
     }
   };
-  const json = () => download(new Blob([JSON.stringify(matching, null, 2)], { type: "application/json" }), `backhouse-log-${stamp()}.json`);
+  const json = () => download(new Blob([JSON.stringify(matching, null, 2)], { type: "application/json" }), `hermes-log-${stamp()}.json`);
   const button = "min-h-11 rounded-md border-2 px-4 font-bold transition-colors duration-150 disabled:border-rule disabled:bg-check disabled:text-pencil";
 
   return (

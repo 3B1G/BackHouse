@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* BackHouse tokens: the green diner guest check. Edit here to restyle everything.
+/* Hermes tokens: the green diner guest check. Edit here to restyle everything.
    One family, Archivo, at two widths: condensed and heavy for statements, normal width for reading. */
 @theme {
   --font-display: "Archivo", ui-sans-serif, system-ui, sans-serif;

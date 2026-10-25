@@ -123,7 +123,7 @@ export function Header({ route, restaurant, onNewCheck }: { route: Route; restau
             className="flex min-h-11 items-center gap-2 font-display text-xl font-extrabold text-ink no-underline [font-stretch:80%]"
           >
             <CheckMark className="h-7 w-7 text-ink" />
-            BackHouse
+            Hermes
           </a>
           <span className="text-[0.9375rem] text-pencil">{restaurant ?? "No restaurant connected yet"}</span>
           </div>

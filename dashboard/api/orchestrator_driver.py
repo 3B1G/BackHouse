@@ -1,4 +1,4 @@
-"""Runs BackHouse's orchestrator (nessie_lab/orchestrator) for the dashboard, inside the orchestrator's own environment.
+"""Runs the orchestrator (nessie_lab/orchestrator) for the Hermes dashboard, inside the orchestrator's own environment.
 orchestrator_bridge.py starts it:
 
     uv run --project nessie_lab/orchestrator python dashboard/api/orchestrator_driver.py brief
@@ -159,7 +159,7 @@ def sign(rel, passphrase, apply):
     shown, ops = ex.plan(subject)
     line = question(shown, ops, ex.today)
     ex.record_approval(subject, Approval(suggestion_id=subject_id(subject), decision="approved",
-                                         decided_at=datetime.now(timezone.utc), note="approved in the BackHouse dashboard"),
+                                         decided_at=datetime.now(timezone.utc), note="approved in the Hermes dashboard"),
                        shown=shown)
     out = {"line": line, "applied": None}
     if apply:

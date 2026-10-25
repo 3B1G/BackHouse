@@ -17,7 +17,7 @@ export function Footer() {
         <div>
           <a href="#/" className={`inline-flex min-h-11 items-center gap-2 font-display text-2xl font-extrabold no-underline [font-stretch:80%] ${LINK}`}>
             <CheckMark className="h-8 w-8 text-ink" />
-            BackHouse
+            Hermes
           </a>
           <p className="mt-3 max-w-[38ch] text-[0.9375rem] text-paper/80">
             Checks a restaurant's bank against its books, then plays out 1,000 futures to show when cash runs short.
@@ -51,7 +51,7 @@ export function Footer() {
 
       <div className="border-t border-white/15">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-5 text-sm text-paper/80 sm:px-6 2xl:max-w-7xl">
-          <p>© 2026 BackHouse</p>
+          <p>© 2026 Hermes</p>
           <p>
             Built at{" "}
             <a href="https://www.calhacks.io" target="_blank" rel="noreferrer" className={`font-bold underline ${LINK}`}>

@@ -82,8 +82,8 @@ export function AddData({
         intro={
           intro ??
           (holding
-            ? "Your question is saved. Connect the bank and upload your books export, or try BackHouse on the sample restaurant's books."
-            : "Connect the bank and upload your books export, or try BackHouse on the sample restaurant's books.")
+            ? "Your question is saved. Connect the bank and upload your books export, or try Hermes on the sample restaurant's books."
+            : "Connect the bank and upload your books export, or try Hermes on the sample restaurant's books.")
         }
         onStarted={follow}
       />

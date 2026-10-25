@@ -1,7 +1,7 @@
 [project]
 name = "back-of-house-dashboard"
 version = "0.1.0"
-description = "Owner dashboard and chat for Back of House: FastAPI backend over nessie_lab, React frontend in web/"
+description = "Owner dashboard and chat for Hermes: FastAPI backend over nessie_lab, React frontend in web/"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115",

@@ -1,5 +1,5 @@
 // Adapted from the "menu hover effects" nav: each link fills with ink from the top while two borders close in above and
-// below it. Recolored to BackHouse's tokens and given its links as props; the current page keeps its borders, and keyboard
+// below it. Recolored to the app's tokens and given its links as props; the current page keeps its borders, and keyboard
 // focus gets the same effect as hover. Small screens use the header's menu button, so this nav has no toggle of its own.
 
 export type NavItem = { label: string; href: string; current?: boolean };

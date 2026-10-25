@@ -69,7 +69,7 @@ export function OwnerDialog({
         <p className="mt-2 rounded-md bg-check px-3 py-2 text-[0.9375rem] font-bold text-ink">{what}</p>
         {setup ? (
           <p className="mt-3 text-[0.9375rem]">
-            First, choose your owner passphrase. It signs every change BackHouse makes for you, and BackHouse never stores it. Write it down: no one can
+            First, choose your owner passphrase. It signs every change Hermes makes for you, and Hermes never stores it. Write it down: no one can
             recover it.
           </p>
         ) : (
