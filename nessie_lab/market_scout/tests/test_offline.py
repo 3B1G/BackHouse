@@ -230,7 +230,7 @@ def test_pages_command_lists_saved_copies_with_dates(root, monkeypatch, capsys, 
 
 
 # ---------------------------------------------------------------- MARKET_SCOUT_PEERS
-PEER = "agent1qorchestrator0ravneet"
+PEER = "agent1qorchestrator0example"
 
 
 async def test_peers_are_merged_into_the_local_resolver(root, monkeypatch):
