@@ -277,6 +277,8 @@ def main():
             emit(kind="done", **context(session))
         elif mode == "menu":
             emit(kind="done", **read_menu(session))
+        elif mode == "bk-status":                # read-only: how far the Bookkeeper has checked, against the newest bank day
+            emit(kind="done", **tools.call(session, "bookkeeper_status", {}))
         elif mode == "scenario":                 # one what-if on the Forecaster's 1,000 futures, for the Chat
             emit(kind="done", **tools.call(session, "forecast_scenario", {"scenario": json.loads(sys.stdin.read() or "{}")}))
         elif mode in OWNER_MODES:

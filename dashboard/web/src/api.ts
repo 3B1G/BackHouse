@@ -156,6 +156,35 @@ export const owner = {
   plan: () => post<Plan>("/api/owner/plan"),
 };
 
+/** How far the Bookkeeper has checked the bank (the orchestrator's bookkeeper_status); null when it can't say. */
+export type BookkeeperCoverage = {
+  available: boolean;
+  covered_through: string | null;
+  latest_bank_date: string | null;
+  days_behind: number | null;
+  open_findings: number | null;
+};
+
+/** The owner's run of the Bookkeeper from the dashboard: "update" when it has a report, "setup" for its first (or a
+ * full rerun). `started_at` and `finished_at` are Unix seconds. */
+export type BookkeeperJob = {
+  state: "idle" | "running" | "done" | "failed";
+  op?: "setup" | "update";
+  full?: boolean;
+  started_at?: number;
+  finished_at?: number | null;
+  result?: "up_to_date" | "new_report" | "failed" | null;
+  note?: string | null;
+  last?: string | null;
+};
+
+export const bookkeeper = {
+  status: () => fetch("/api/bookkeeper").then((r) => read<{ run: BookkeeperJob; coverage: BookkeeperCoverage | null }>(r)),
+  /** The orchestrator's update: done at once and free when the Bookkeeper has checked every bank day. `full` reruns
+   * everything from scratch, which takes up to an hour of ASI:One. */
+  run: (full = false) => post<{ run: BookkeeperJob }>("/api/bookkeeper/run", { confirm: "run the bookkeeper", full }),
+};
+
 async function read<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let message = `Something went wrong (error ${res.status}). Try again.`;

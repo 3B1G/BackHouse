@@ -27,6 +27,7 @@ DRIVER = Path(__file__).with_name("orchestrator_driver.py")
 SOURCES = [LAB / name / "src" for name in ("orchestrator", "cost_price", "market_scout", "changes")]
 # Which agent answers each orchestrator tool, by the names the developer page uses.
 AGENT = {"get_cash_position": "Nessie", "list_bills_due": "Nessie", "lookup": "Bookkeeper", "get_findings": "Bookkeeper",
+         "bookkeeper_status": "Bookkeeper",
          "get_menu": "Records", "scan_market": "Market scout", "forecast_base": "Forecaster", "forecast_scenario": "Forecaster",
          "list_upcoming_changes": "Changes", "propose_fix": "Changes", "preview_suggestion": "Changes"}
 MAX_LOG_LINES = 20

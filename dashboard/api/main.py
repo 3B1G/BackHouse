@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+import bookkeeper_run
 import core
 from core import DATA, TAG, UPLOADS
 import forecast
@@ -207,6 +208,27 @@ def demo_reset(r: DemoReset):
         return orchestrator_bridge.reset_demo()
     except orchestrator_bridge.OrchestratorError as e:
         raise HTTPException(400, str(e)[:300])
+
+
+class BookkeeperRun(BaseModel):
+    confirm: Literal["run the bookkeeper"]           # said in the body, so nothing starts by accident
+    full: bool = False                               # rerun everything from scratch, even when nothing is new
+
+
+@app.get("/api/bookkeeper")
+def bookkeeper_status():
+    """How far the Bookkeeper has checked the bank, and the owner's run of it from the dashboard, if any."""
+    return bookkeeper_run.status()
+
+
+@app.post("/api/bookkeeper/run")
+def bookkeeper_start(r: BookkeeperRun):
+    """The owner's "Run the Bookkeeper" (bookkeeper_run.py): the orchestrator's update, or with no report yet its first
+    run, in the background. It spends ASI:One only when the bank has days the Bookkeeper hasn't checked."""
+    try:
+        return {"run": bookkeeper_run.start(full=r.full)}
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
 
 
 @app.post("/api/owner/plan")
