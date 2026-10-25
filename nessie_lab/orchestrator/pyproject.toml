@@ -1,0 +1,31 @@
+[project]
+name = "restaurant-orchestrator"
+version = "0.1.0"
+description = "ASI orchestrator: gathers facts (Bookkeeper, Forecaster, Market scout, cost/price DB) and proposes fixes for the owner to approve with CH"
+requires-python = "==3.13.*"
+dependencies = ["uagents==0.26.1", "pydantic>=2.10,<3", "httpx>=0.28,<1", "python-dotenv>=1,<2",
+                "numpy", "pandas>=2.2,<3", "matplotlib>=3.8", "cryptography>=44,<47",
+                "restaurant-cost-price", "restaurant-market-scout", "restaurant-changes"]
+
+[project.scripts]
+orchestrator = "orchestrator.cli:main"
+
+[tool.uv.sources]
+restaurant-cost-price = { path = "../cost_price", editable = true }
+restaurant-market-scout = { path = "../market_scout", editable = true }
+restaurant-changes = { path = "../changes", editable = true }
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/orchestrator"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "tests_core"]
+markers = ["realdata: runs on a scratch copy of nessie_lab/data (skipped when it is missing)"]

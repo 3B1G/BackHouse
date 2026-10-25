@@ -27,6 +27,10 @@ data/audit/
 # changes tool locks; the cost_price seal is local to each machine
 data/changes-locks/
 data/*.seal.json
+# orchestrator: proposed suggestions awaiting the owner
+data/suggestions/
+# orchestrator private state (REST token, Bookkeeper state)
+data/orchestrator/
 
 # Bookkeeper runtime artifacts and local environments
 .venv/
