@@ -44,7 +44,7 @@ export const monthYear = (ym: string) => `${LONG[+ym.slice(5, 7) - 1]} ${ym.slic
 /** "2027-01" -> "January" */
 export const monthName = (ym: string) => LONG[+ym.slice(5, 7) - 1];
 
-const MINUS = "−";
+export const MINUS = "−";
 
 /** Money that can go below zero: "−$6,529", with a real minus sign. */
 export const cash = (cents: number) => (Math.round(cents / 100) < 0 ? MINUS : "") + money(Math.abs(cents));

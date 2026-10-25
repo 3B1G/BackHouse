@@ -1,11 +1,27 @@
 import { IconCheck, IconMessageCircle, IconPencil, IconX } from "@tabler/icons-react";
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { owner, remember, type Fix, type Plan, type PricePosition, type StepEvent } from "../api";
-import { mediumDate, money, moneyExact } from "../format";
+import { MINUS, mediumDate, money, moneyExact } from "../format";
 import { OwnerDialog } from "./OwnerDialog";
 
 const pct = (share: number) => `${Math.round(Math.abs(share) * 100)}%`;
 const price = (cents: number) => (cents % 100 ? moneyExact(cents) : money(cents));
+const daysOf = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
+
+/** What a change does to the owner's cash, whichever way it goes (the owner's own price can hurt): when cash runs out,
+ * then each month. */
+function effects(days: number | null, monthly: number | null) {
+  return [
+    days == null
+      ? null
+      : days > 0
+        ? `cash lasts about ${daysOf(days)} longer on average`
+        : days < 0
+          ? `cash runs out about ${daysOf(-days)} sooner on average`
+          : "cash runs out about the same day on average",
+    !monthly ? null : monthly > 0 ? `you keep about ${money(monthly)} more each month` : `you have about ${money(-monthly)} less each month`,
+  ].filter((part): part is string => part !== null);
+}
 
 /** A dish and price the owner arrived with (the Chat's "Set Funghi Pizza to $25 on the dashboard" button). */
 export type Focus = { dish: string; price: number | null };
@@ -47,9 +63,7 @@ function reason(fx: Fix, seen?: PricePosition) {
 /** Opens the Chat with this suggestion already typed, for the owner to finish the question ("what if $20 instead?"). */
 function askChat(fx: Fix, days: number | null) {
   // The suggestion's own numbers go along, so the Chat compares against them instead of guessing them.
-  const effect = [days ? `cash lasts about ${days} days longer on average` : null, fx.monthly_cents ? `about ${money(fx.monthly_cents)} more each month` : null]
-    .filter(Boolean)
-    .join(", ");
+  const effect = effects(days, fx.monthly_cents).join(", ");
   remember("boh-chat-draft", `About the suggestion "${fx.title}"${effect ? ` (${effect})` : ""}: `);
   window.location.hash = "#/chat";
 }
@@ -152,6 +166,7 @@ function FixCard({
   const [error, setError] = useState<string | null>(null);
   const card = useRef<HTMLLIElement>(null);
   const days = current.days_later == null ? null : Math.round(current.days_later);
+  const said = effects(days, current.monthly_cents).join(", and ");
   const why = reason(fx, seen);
   const own = current.id !== fx.id;
   const moved =
@@ -195,17 +210,19 @@ function FixCard({
           </p>
           <h3 className="mt-1.5 font-display text-2xl font-extrabold leading-tight text-ink [font-stretch:80%]">{current.title}</h3>
         </div>
-        {days != null && days > 0 && (
+        {days != null && days !== 0 && (
           <p className="sm:text-right">
-            <span className="block font-display text-3xl font-extrabold leading-none text-ink [font-stretch:80%]">+{days} days</span>
+            <span className={`block font-display text-3xl font-extrabold leading-none [font-stretch:80%] ${days > 0 ? "text-ink" : "text-serial"}`}>
+              {days > 0 ? "+" : MINUS}
+              {daysOf(Math.abs(days))}
+            </span>
             <span className="text-sm text-pencil">of cash, on average</span>
           </p>
         )}
       </div>
       <div className="space-y-1.5 px-5 pb-4 pt-3 text-[0.9375rem] text-carbon">
         <p>
-          {days != null && days > 0 ? `Cash lasts about ${days} days longer on average` : "It helps your cash"}
-          {current.monthly_cents ? `, and you keep about ${money(current.monthly_cents)} more each month` : ""}.
+          {said && `${said[0].toUpperCase()}${said.slice(1)}.`}
           {moved && ` Likely out of cash ${mediumDate(moved[1])} instead of ${mediumDate(moved[0])}.`}
         </p>
         {why && <p>{why}</p>}
