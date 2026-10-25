@@ -23,13 +23,14 @@ function plan(c: BookkeeperCoverage) {
     return "It hasn't made a report for this data yet. Its first run reads a year of bank transactions with ASI:One, which can take up to an hour, so it starts from the command line: orchestrator bookkeeper-setup.";
   if (c.days_behind)
     return `It has checked your bank through ${mediumDate(c.covered_through!)}, but your bank goes to ${mediumDate(c.latest_bank_date!)}: ${c.days_behind} day${c.days_behind === 1 ? "" : "s"} it hasn't seen. Running it re-checks the books with ASI:One and its Verifier, which can take up to 20 minutes.`;
-  return `It has checked every bank day, through ${mediumDate(c.covered_through!)}. Checking again looks for new transactions first: with none, it's done at once and spends nothing.`;
+  return `It has checked every bank day, through ${mediumDate(c.covered_through!)}. Running it again looks for new transactions first: with none, it's done at once and spends nothing.`;
 }
 
-/** "Run the Bookkeeper": the card the Chat puts under its answer, where the owner starts the orchestrator's own update.
- * When the Bookkeeper has already checked every bank day it answers "up to date" at once and spends nothing; a run that
- * would spend ASI:One asks first. While it works, the thinking orb; then how it went, word by word. */
-export function BookkeeperRun() {
+/** The Bookkeeper's card under a Chat answer: the orchestrator's own update. Asked to run the Bookkeeper, the Chat starts
+ * it itself when nothing is new (it answers "up to date" at once and spends nothing), and this card shows it working;
+ * a run that would spend ASI:One starts here, after the owner's OK. While it works, the thinking orb; then how it went,
+ * word by word. `receivedAt`: when the answer arrived (ms), so a run that answer started plays here. */
+export function BookkeeperRun({ receivedAt }: { receivedAt?: number }) {
   const [coverage, setCoverage] = useState<BookkeeperCoverage | null>(null);
   const [job, setJob] = useState<BookkeeperJob>({ state: "idle" });
   const [asking, setAsking] = useState(false);
@@ -50,12 +51,15 @@ export function BookkeeperRun() {
   useEffect(() => {
     load()
       .then((s) => {
-        if (s.run.state !== "running") return;
-        setQuick(s.coverage?.days_behind === 0); // a run already under way when the card opens
+        const started = (s.run.started_at ?? 0) * 1000;
+        // The answer this card is under just started it (the quick check, often done already), or a run is under way.
+        const justAsked = !!receivedAt && Date.now() - receivedAt < 30_000 && started > receivedAt - 120_000;
+        if (s.run.state !== "running" && !justAsked) return;
+        setQuick(s.run.state !== "running" || s.coverage?.days_behind === 0);
         setOrb(true);
       })
       .catch(() => {}); // no orchestrator, no card
-  }, []);
+  }, [receivedAt]);
 
   // While it runs: a ticking clock, and the server asked again (soon at first: "up to date" takes a second).
   useEffect(() => {
@@ -100,7 +104,7 @@ export function BookkeeperRun() {
 
   return (
     <div className="mt-4 max-w-[62ch] rounded-lg border-2 border-rule bg-check/40 p-4">
-      <h3 className="font-display text-xl font-extrabold text-ink [font-stretch:80%]">Run the Bookkeeper</h3>
+      <h3 className="font-display text-xl font-extrabold text-ink [font-stretch:80%]">The Bookkeeper</h3>
       {coverage && !orb && <p className="mt-1 text-[0.9375rem] text-carbon">{plan(coverage)}</p>}
 
       {orb ? (
@@ -115,7 +119,7 @@ export function BookkeeperRun() {
             }}
           />
           <p className="mt-1 text-center text-sm text-pencil" aria-live="polite">
-            {running && job.started_at ? `Started ${at(job.started_at)}, ${since(job.started_at, now)} ago.` : starting ? "Starting…" : `${settled}.`}
+            {job.started_at && !starting ? `Started ${at(job.started_at)}${running ? `, ${since(job.started_at, now)} ago` : ""}.` : "Starting…"}
             {!quick && running ? " You can keep using Hermes: its findings come up on the dashboard when it's done." : ""}
           </p>
         </div>
@@ -133,8 +137,8 @@ export function BookkeeperRun() {
                 onClick={() => (upToDate ? void start() : setAsking(true))}
                 className={`${button} border-ink bg-ink text-paper hover:bg-ink/90 disabled:opacity-60`}
               >
-                {upToDate ? <IconRefresh aria-hidden="true" size={18} /> : <IconPlayerPlay aria-hidden="true" size={18} />}
-                {upToDate ? "Check for new transactions" : "Run the Bookkeeper"}
+                {job.result ? <IconRefresh aria-hidden="true" size={18} /> : <IconPlayerPlay aria-hidden="true" size={18} />}
+                {job.result ? "Run it again" : "Run the Bookkeeper"}
               </button>
             </div>
             {asking && (

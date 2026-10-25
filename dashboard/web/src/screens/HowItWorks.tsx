@@ -84,7 +84,7 @@ export function HowItWorks({ steps, running, plan }: { steps: Steps; running: bo
       title: "Ask the Chat anything",
       agent: "Chat agent",
       uses: "ASI:One by Fetch.ai",
-      description: "Questions about your cash, a bill or a what-if, answered from the same bank and records. It can't change anything.",
+      description: "Questions about your cash, a bill or a what-if, answered from the same bank and records. It can run the Bookkeeper's check, but it can't change anything.",
       status: "Open it from the menu, any time",
       stamp: { tone: "ready", text: "Ready" },
       href: "#/chat",

@@ -1,10 +1,12 @@
-"""The owner's "Run the Bookkeeper", from the Chat's card: the orchestrator's own update, run in the background.
+"""The owner's "Run the Bookkeeper", from the Chat: the orchestrator's own update, run in the background.
 
 `orchestrator bookkeeper-update` first compares the days the Bookkeeper has checked with the newest bank day. When nothing
 is new it answers "up to date" at once and spends nothing; otherwise it reruns the full, verified investigation on ASI:One
 (up to 20 minutes), the new report is ingested, and the owner reviews its findings and signs again. The website starts
 nothing bigger: a first run, or a rerun from scratch, takes up to an hour and stays the owner's command line
-(`orchestrator bookkeeper-setup`). One run at a time; what it prints streams to the developer page.
+(`orchestrator bookkeeper-setup`). The Chat starts the update itself when nothing is new (chat.py run_bookkeeper); a run
+that would spend ASI:One starts from the card under its answer, after the owner's OK. One run at a time; what it prints
+streams to the developer page.
 """
 import os
 import shutil
@@ -22,6 +24,8 @@ COVERAGE_SECONDS = 30                            # how old the card's "checked t
 _LOCK = threading.Lock()
 _JOB: dict = {"state": "idle"}                   # idle, running, done or failed; started_at, finished_at, result, note, last
 _COVERAGE: dict = {"at": 0.0, "value": None}
+_FINISHED = threading.Event()                    # set when the latest run is over
+_FINISHED.set()
 
 
 def coverage(fresh=False):
@@ -50,13 +54,26 @@ def status():
     return {"run": job, "coverage": _COVERAGE["value"] if job["state"] == "running" else coverage()}
 
 
-def start():
-    """Starts the update in the background. Raises RuntimeError while one is running, or before the Bookkeeper has a
-    report: its first run is the command line's."""
+def job():
+    """The owner's run, if any: idle, running, done or failed."""
+    with _LOCK:
+        return dict(_JOB)
+
+
+def wait(seconds):
+    """The run, once it's over or after `seconds`, whichever comes first (the quick check takes a second or two)."""
+    _FINISHED.wait(seconds)
+    return job()
+
+
+def start(by="owner", known=None):
+    """Starts the update in the background, for the owner or for a Chat answer (`by`, its trace group). Raises
+    RuntimeError while one is running, or before the Bookkeeper has a report: its first run is the command line's.
+    `known` is a coverage() the caller has just read."""
     with _LOCK:                                  # at once, before asking the orchestrator (a second or two)
         if _JOB.get("state") == "running":
             raise RuntimeError("The Bookkeeper is already running.")
-    known = coverage(fresh=True)
+    known = known or coverage(fresh=True)
     if not (known and known["available"]):
         raise RuntimeError("The Bookkeeper hasn't made a report for this data yet. Its first run takes up to an hour, so it "
                            "starts from the command line: orchestrator bookkeeper-setup.")
@@ -65,9 +82,10 @@ def start():
             raise RuntimeError("The Bookkeeper is already running.")
         _JOB.clear()
         _JOB.update(state="running", started_at=time.time(), finished_at=None, result=None, note=None, last=None)
-        job = dict(_JOB)
-    threading.Thread(target=_run, daemon=True).start()
-    return job
+        _FINISHED.clear()
+        started = dict(_JOB)
+    threading.Thread(target=_run, args=(by or "owner",), daemon=True).start()
+    return started
 
 
 def _command():
@@ -85,8 +103,9 @@ def _env():
     return env
 
 
-def _run():
-    span = tracelog.Span("Bookkeeper", "Owner ran the Bookkeeper: is there anything new to check?", "owner")
+def _run(by):
+    who = "Owner" if by == "owner" else "The Chat, for the owner,"
+    span = tracelog.Span("Bookkeeper", f"{who} ran the Bookkeeper: is there anything new to check?", by)
     lines, code = [], None
     try:
         p = subprocess.Popen(_command(), cwd=LAB, env=_env(), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -98,7 +117,7 @@ def _run():
                 if not line:
                     continue
                 lines.append(line[:300])
-                tracelog.emit("Bookkeeper", "log", line[:300], "owner")
+                tracelog.emit("Bookkeeper", "log", line[:300], by)
                 with _LOCK:
                     _JOB["last"] = line[:200]
             code = p.wait()
@@ -111,6 +130,7 @@ def _run():
         _JOB.update(state="done" if code == 0 else "failed", finished_at=time.time(), result=result, note=note)
     orchestrator_bridge.forget()                 # the review and the Chat read the new state
     _COVERAGE["at"] = 0.0
+    _FINISHED.set()
     (span.done if code == 0 else span.fail)(note[:200])
 
 

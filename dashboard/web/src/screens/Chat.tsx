@@ -8,8 +8,9 @@ import { Logo } from "../components/Header";
 
 // needsData: asked before any data was in (the question is held); info: a note from the app, never sent to the model;
 // links: buttons to a change on the dashboard, where the owner approves, declines or sets the price; sections: the parts
-// of the dashboard the answer relates to; actions: cards under the answer ("bookkeeper": where the owner runs it).
+// of the dashboard the answer relates to; actions: cards under the answer ("bookkeeper": its run); at: when it arrived.
 type Message = ChatTurn & {
+  at?: number;
   sources?: string[];
   failed?: boolean;
   offTopic?: boolean;
@@ -132,6 +133,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
               links: e.links,
               sections: e.sections,
               actions: e.actions,
+              at: Date.now(),
             },
           ]);
         else setMessages((m) => [...m, { role: "assistant", content: e.text, failed: true }]);
@@ -196,7 +198,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
           </h1>
           <p className="mt-3 max-w-[58ch] text-[0.9375rem] text-pencil">
             Answers come from {restaurant ? `${restaurant.split(",")[0]}'s` : "your"} bank and records, through ASI:One by Fetch.ai. It can
-            look things up and run what-ifs, but it can't change anything.
+            look things up, try what-ifs and run the Bookkeeper, but it can't change anything.
           </p>
         </div>
         {messages.length > 0 && !busy && (
@@ -285,7 +287,7 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
                 <Answer text={m.content} />
               )}
               {!!m.sources?.length && <p className="mt-2 text-sm text-pencil">From {sourcesText(m.sources)}.</p>}
-              {i === bookkeeperAt && <BookkeeperRun />}
+              {i === bookkeeperAt && <BookkeeperRun receivedAt={m.at} />}
               {!!m.links?.length && (
                 <ul className="mt-3 flex flex-wrap gap-2">
                   {m.links
