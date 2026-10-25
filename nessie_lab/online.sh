@@ -1,27 +1,28 @@
 #!/usr/bin/env bash
-# Bring Hermes's agents online on Agentverse: the Bookkeeper, its Verifier and the orchestrator, which talk to each
-# other through their Agentverse mailboxes. All three stay online until Ctrl-C.
+# Bring Hermes's agents online on Agentverse: the Bookkeeper, its Verifier, the Market scout and the orchestrator,
+# which talk to each other through their Agentverse mailboxes. All four stay online until Ctrl-C.
 #
 #     ./online.sh          (from nessie_lab/, or from anywhere by its path)
 #
 # This script is how they go online: it sets <AGENT>_MAILBOX only for the processes it starts and leaves .env alone,
-# so a plain `bookkeeper serve` or `orchestrator serve` stays local. Seeds (BOOKKEEPER_SEED, VERIFIER_SEED,
-# ORCHESTRATOR_SEED), ASI1_API_KEY, BOOKKEEPER_ADDR and, the first time a seed is used, AGENTVERSE_TOKEN come from
-# nessie_lab/.env. An agent without a mailbox is started once with its inspector on, its mailbox is created through
+# so a plain `serve` stays local. Seeds (BOOKKEEPER_SEED, VERIFIER_SEED, MARKET_SCOUT_SEED, ORCHESTRATOR_SEED),
+# ASI1_API_KEY, BOOKKEEPER_ADDR, SCOUT_ADDR, MARKET_SCOUT_ALLOWED_SENDERS and, the first time a seed is used,
+# AGENTVERSE_TOKEN come from nessie_lab/.env. An agent without a mailbox is started once with its inspector on, its mailbox is created through
 # POST /connect, and it is restarted without the inspector. The agents share this folder's data/: the Bookkeeper's
-# reply names a report file, and the orchestrator reads it from here.
+# and the scout's replies name a report file, and the orchestrator reads it from here.
 set -euo pipefail
 set -m                      # each agent in its own process group: Ctrl-C reaches this script, which stops them cleanly
 
 cd "$(dirname "$0")"        # nessie_lab: the agents' data root and .env
 uv sync --project bookkeeper --quiet
+uv sync --project market_scout --quiet
 uv sync --project orchestrator --quiet
 BK=bookkeeper/.venv/bin/bookkeeper
 ORCH=orchestrator/.venv/bin
 export PYTHONUNBUFFERED=1   # print the agents' logs as they happen
 
-NAMES=(verifier bookkeeper orchestrator)                        # start order: each one's peers are up first
-declare -A PORT=([verifier]=8003 [bookkeeper]=8001 [orchestrator]=8005) PID=() ADDRESS=()
+NAMES=(verifier bookkeeper market_scout orchestrator)           # start order: each one's peers are up first
+declare -A PORT=([verifier]=8003 [bookkeeper]=8001 [market_scout]=8006 [orchestrator]=8005) PID=() ADDRESS=()
 
 listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
@@ -59,6 +60,7 @@ start() {  # name inspector: one agent in mailbox mode, its output prefixed with
     case $name in
       verifier) exec "$BK" serve-verifier --port "${PORT[$name]}" ;;
       bookkeeper) exec "$BK" serve --port "${PORT[$name]}" ;;
+      market_scout) exec market_scout/.venv/bin/market-scout serve --port "${PORT[$name]}" ;;
       orchestrator) exec "$ORCH/orchestrator" serve ;;
     esac
   ) > >(trap '' INT; sed -u "s/^/[$name] /") 2>&1 &

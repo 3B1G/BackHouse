@@ -24,7 +24,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from uagents import Agent, Context, Protocol
+from uagents import Agent, Context, Model, Protocol
+from uagents.registration import AlmanacApiRegistrationPolicy
 from uagents.resolver import RulesBasedResolver
 from uagents_core.contrib.protocols.chat import (
     ChatAcknowledgement, ChatMessage, EndSessionContent, TextContent, chat_protocol_spec,
@@ -214,6 +215,10 @@ def build_protocol(service: MarketScout, allowed: set[str] | None = None, limite
     return protocol
 
 
+class Health(Model):
+    status: str = "ok"
+
+
 def bind_localhost():
     """uagents 0.26.1 binds every agent server to uagents.asgi.HOST (0.0.0.0) and has no parameter for it."""
     import uagents.asgi
@@ -240,11 +245,21 @@ def make_agent(root: Path, port=8006, local_only=False, offline=None):
         "registration_policy": LocalRegistration(),
         "resolve": RulesBasedResolver(resolver_rules(root)),
     }
-    # uagents 0.26.1: an explicit endpoint overrides the mailbox, so only pass one in local mode. Mailbox mode
-    # needs the inspector on, because Agentverse connects the mailbox through it (loopback only).
+    # uagents 0.26.1: an explicit endpoint overrides the mailbox, so only pass one in local mode. In mailbox mode the
+    # inspector routes, which any web page can call (CORS *), are served only with MARKET_SCOUT_INSPECTOR on, for the
+    # one-time POST /connect that creates the Agentverse mailbox; GET /health keeps the server, and so the agent,
+    # running without them (with no REST route, 0.26.1 stops a mailbox agent at once). Registration uses the Almanac
+    # API alone, waiting 10 s (0.26.1 waits 1 s; the API takes about 2 s): no on-chain registration, which wants FET.
     where = {} if mailbox else {"endpoint": [f"http://127.0.0.1:{port}/submit"]}
-    agent = Agent(name="market_scout", seed=seed, port=port, mailbox=mailbox, enable_agent_inspector=mailbox,
+    inspector = mailbox and os.getenv("MARKET_SCOUT_INSPECTOR", "false").strip().lower() in TRUE
+    if mailbox:
+        local_options = {"registration_policy": AlmanacApiRegistrationPolicy(timeout=10)}
+    agent = Agent(name="market_scout", seed=seed, port=port, mailbox=mailbox, enable_agent_inspector=inspector,
                   publish_agent_details=mailbox, report_events=False, **where, **local_options)
+    if mailbox:
+        @agent.on_rest_get("/health", Health)
+        async def health(ctx: Context) -> Health:
+            return Health()
     agent.include(build_protocol(MarketScout(root, offline=offline)), publish_manifest=mailbox)
     return agent
 
