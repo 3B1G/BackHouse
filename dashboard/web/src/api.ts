@@ -165,12 +165,10 @@ export type BookkeeperCoverage = {
   open_findings: number | null;
 };
 
-/** The owner's run of the Bookkeeper from the dashboard: "update" when it has a report, "setup" for its first (or a
- * full rerun). `started_at` and `finished_at` are Unix seconds. */
+/** The owner's run of the Bookkeeper from the Chat's card (the orchestrator's update). `started_at` and `finished_at`
+ * are Unix seconds. */
 export type BookkeeperJob = {
   state: "idle" | "running" | "done" | "failed";
-  op?: "setup" | "update";
-  full?: boolean;
   started_at?: number;
   finished_at?: number | null;
   result?: "up_to_date" | "new_report" | "failed" | null;
@@ -180,9 +178,8 @@ export type BookkeeperJob = {
 
 export const bookkeeper = {
   status: () => fetch("/api/bookkeeper").then((r) => read<{ run: BookkeeperJob; coverage: BookkeeperCoverage | null }>(r)),
-  /** The orchestrator's update: done at once and free when the Bookkeeper has checked every bank day. `full` reruns
-   * everything from scratch, which takes up to an hour of ASI:One. */
-  run: (full = false) => post<{ run: BookkeeperJob }>("/api/bookkeeper/run", { confirm: "run the bookkeeper", full }),
+  /** The orchestrator's update: done at once and free when the Bookkeeper has checked every bank day. */
+  run: () => post<{ run: BookkeeperJob }>("/api/bookkeeper/run", { confirm: "run the bookkeeper" }),
 };
 
 async function read<T>(res: Response): Promise<T> {
@@ -221,9 +218,12 @@ export type ChatTurn = { role: "user" | "assistant"; content: string };
 export type ChatLink = { label: string; href: string };
 /** A part of the dashboard an answer relates to, picked by rules on the server (never by the model). */
 export type ChatSection = { id: string; label: string; href: string; detail: string };
+/** A card under a Chat answer: "bookkeeper" is the Bookkeeper's, where the owner runs it. */
+export type ChatAction = "bookkeeper";
 export type ChatEvent =
-  | { type: "tool"; text: string }
-  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean; links?: ChatLink[]; sections?: ChatSection[] }
+  /** A lookup the Chat is making, and where it looks ("Bank (Nessie)", "Your records", "Forecast", "Dashboard"...). */
+  | { type: "tool"; text: string; source?: string }
+  | { type: "answer"; text: string; sources: string[]; off_topic?: boolean; links?: ChatLink[]; sections?: ChatSection[]; actions?: ChatAction[] }
   /** Asked before any data is in: the chat holds the question and offers an upload or the sample books. */
   | { type: "needs_data"; text: string; missing: ("bank" | "records")[] }
   | { type: "error"; text: string };
