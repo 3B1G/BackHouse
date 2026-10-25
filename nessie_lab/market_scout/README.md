@@ -27,6 +27,9 @@ The scout reads and writes `data/cost_price.db` through the `cost_price` package
 - `MARKET_SCOUT_LOCAL_CLIENT_SEED`: the local demo client's seed. Unset = a random seed generated on first use and
   kept in `data/market_scout/local_client_seed` (owner-only permissions on POSIX; the directory has its own
   `.gitignore`). There is no seed in the source any more: a published seed let anyone sign as the allowed client.
+- `MARKET_SCOUT_OFFLINE=1`: saved menu pages only (same as `--offline`, see "Offline demo").
+- `MARKET_SCOUT_PEERS`, `MARKET_SCOUT_PEERS_ALLOW_REMOTE`: other agents the scout can reply to in local mode (see
+  "Calling the scout from the orchestrator").
 - `MARKET_SCOUT_BIND_HOST`: where `serve` and `client` listen (default `127.0.0.1`). uagents 0.26.1 has no host
   option (the `Agent` constructor takes only a port, and `uagents/asgi.py` binds the module constant
   `HOST = "0.0.0.0"`), so the scout sets `uagents.asgi.HOST` before starting. In 0.26.1 that constant is read only
@@ -47,7 +50,7 @@ uv run --project market_scout market-scout client --target agent1... --request-i
 ```
 
 Chat request (JSON in a ChatMessage): `{"request_id": "...", "items": [], "service": "dinner", "as_of": null,
-"refresh": false, "par_band": 0.05}`. `request_id` is 1-64 of `A-Z a-z 0-9 . _ -`; at most 50 items of 1-80
+"refresh": false, "offline": false, "par_band": 0.05}`. `request_id` is 1-64 of `A-Z a-z 0-9 . _ -`; at most 50 items of 1-80
 characters. Reply: `{"request_id", "report_id", "filename", "status": "ok", "positions": {dish: position},
 "upcoming": {dish: {"price_cents", "from", "position"} and/or {"leaving_from"}}}` (`upcoming` lists only dishes
 with an approved change after the scan date; `positions` is always the menu on that date). The full
@@ -57,6 +60,82 @@ report back.
 
 Other replies: `"status": "error"` (bad request, unknown dish, sender not on the allowlist), `"rate_limited"` (more
 than 5 requests from one sender in 10 minutes) and `"busy"` (a scan is already running; it is not queued, ask again).
+
+## Calling the scout from the orchestrator (Ravneet)
+
+The scout listens on port **8003** (`http://127.0.0.1:8003/submit`) and speaks the Agent Chat Protocol: send one
+`ChatMessage` whose text is a `MarketRequest` as JSON; you get a `ChatAcknowledgement`, then one `ChatMessage` with
+the reply JSON and an `end-session` part. Its address is printed at startup (it follows from `MARKET_SCOUT_SEED`).
+
+**Local mode** (both agents on this machine, no Agentverse). In uagents local mode an agent can only reply to
+addresses its resolver knows, so the orchestrator has to be listed as a peer **and** allowed:
+
+```bash
+MARKET_SCOUT_SEED=<private scout seed>
+MARKET_SCOUT_ALLOWED_SENDERS=agent1<orchestrator address>
+MARKET_SCOUT_PEERS=agent1<orchestrator address>=http://127.0.0.1:8005/submit
+uv run --project market_scout market-scout serve            # add --offline for the demo
+```
+
+On the orchestrator, resolve the scout with `RulesBasedResolver({"agent1<scout address>": "http://127.0.0.1:8003/submit"})`.
+`MARKET_SCOUT_PEERS` is comma-separated `address=endpoint` pairs. Being a peer grants nothing: a peer that is not in
+`MARKET_SCOUT_ALLOWED_SENDERS` is refused ("sender not allowed"), and peers are never added to the allowlist
+(a startup warning names any peer that is missing from it). Each address must start with `agent1` and each endpoint
+must be `http(s)` on `127.0.0.1` or `localhost`, unless `MARKET_SCOUT_PEERS_ALLOW_REMOTE=1`. A malformed entry, a
+duplicate, or an entry for the local demo client stops `serve` with a message naming the entry.
+
+**Mailbox mode** (through Agentverse): no peers needed, replies go through the Almanac (`MARKET_SCOUT_PEERS` is
+ignored, with a warning).
+
+```bash
+MARKET_SCOUT_SEED=<private scout seed>
+MARKET_SCOUT_ALLOWED_SENDERS=agent1<orchestrator address>
+MARKET_SCOUT_MAILBOX=true
+uv run --project market_scout market-scout serve
+```
+
+Request (`MarketRequest`, unknown fields are refused):
+
+```json
+{"request_id": "orch-0001", "items": ["Margherita Pizza"], "service": "dinner", "as_of": null,
+ "refresh": false, "offline": false, "par_band": 0.05}
+```
+
+Only `request_id` is required (1-64 of `A-Z a-z 0-9 . _ -`; use a new one per scan: the same sender and id always
+return the first report, and reusing an id with other parameters is an error). `offline: true` asks for saved pages
+only; `false` cannot turn off a scout started with `--offline` or `MARKET_SCOUT_OFFLINE=1`.
+
+Reply on success (`MarketResult`):
+
+```json
+{"request_id": "orch-0001", "report_id": "M-...", "filename": "data/market_reports/M-....json", "status": "ok",
+ "positions": {"Margherita Pizza": "below_market"},
+ "upcoming": {"Tiramisu": {"price_cents": 1250, "from": "2026-10-25", "position": "at_par"}}}
+```
+
+Otherwise `{"request_id", "status": "error", "error", "error_type"}` (bad JSON, unknown dish, reused id),
+`{"status": "error", "error": "sender not allowed"}`, `{"status": "rate_limited", "error"}` (more than **5 requests
+per sender in 10 minutes**, sliding window) or `{"request_id", "status": "busy", "error"}`: a scan is already
+running. Busy requests are **not queued**; wait a few seconds and send the same request again (a scan takes at most
+about 120 s; offline it takes seconds). Both counters are in memory and reset when the scout restarts.
+
+## Offline demo
+
+The venue bans hotspots, so run the demo from saved pages. First check that every competitor page has a saved copy
+(the command exits 1 if any is missing):
+
+```bash
+uv run --project market_scout market-scout pages
+uv run --project market_scout market-scout run --offline --request-id demo-offline-1
+uv run --project market_scout market-scout serve --offline   # or MARKET_SCOUT_OFFLINE=1 for serve and the agent
+```
+
+Offline, `PageStore.get` never builds an HTTP client or resolves a name: a saved copy is used whatever its age (and
+`refresh` is ignored), and the report notes `offline: nothing fetched; using saved copy from <date> (<n> pages)`. A
+page with no saved copy becomes the limitation `<name>: menu not read (offline, no saved copy)` and the rest of the
+scan goes on. Apify is not called (the cached Google Maps list in `data/market_scout/apify_cache.json` is used if
+there is one, whatever its age) and the ASI reader is skipped, both with a note. The httpx client is built with
+`trust_env=False` on purpose (a proxy must not bypass the address pinning), so a proxy can't block it: use this switch.
 
 ## How a price gets in
 

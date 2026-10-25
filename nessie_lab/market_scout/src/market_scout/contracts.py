@@ -21,6 +21,9 @@ class MarketRequest(Contract):
     service: Service = "dinner"
     as_of: date | None = None                             # our menu on this date; None = today (picks up CH changes)
     refresh: bool = False                                 # True = re-fetch pages, but only snapshots over 6 h old
+    # True = saved menu pages only, no Apify, no ASI. A sender can ask for offline but never turn it off: when the
+    # operator started the scout offline (--offline, MARKET_SCOUT_OFFLINE=1) false here changes nothing.
+    offline: bool = False
     par_band: float = Field(0.05, ge=0, le=0.5)           # within ±5% of the median counts as at par
 
 

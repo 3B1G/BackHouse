@@ -51,10 +51,11 @@ def sha(html: str) -> str:
 
 class FakePages:
     def __init__(self, pages=PAGES):
-        self.pages, self.calls = pages, []
+        self.pages, self.calls, self.offline_calls = pages, [], []
 
-    def get(self, url, refresh=False):
+    def get(self, url, refresh=False, offline=False):
         self.calls.append(url)
+        self.offline_calls.append(offline)
         if url not in self.pages:
             raise ValueError("blocked")
         html = self.pages[url]
