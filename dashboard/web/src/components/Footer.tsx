@@ -1,3 +1,5 @@
+import { useState } from "react";
+import { owner } from "../api";
 import { LINKS } from "../links";
 import { CheckMark } from "./Header";
 
@@ -9,6 +11,55 @@ const NOTES = [
 
 // On ink, like the header's bar, so links and focus rings are drawn in paper.
 const LINK = "text-paper underline-offset-4 hover:underline focus-visible:outline-paper";
+
+/** "Reset the demo": asks first, then clears every approval and the owner passphrase so the suggestions can be shown
+ * again. The decisions on the findings stay. The page reloads to show the reset state. */
+function ResetDemo() {
+  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const button = "min-h-11 rounded-md px-4 text-[0.9375rem] font-bold focus-visible:outline-paper";
+
+  const reset = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await owner.resetDemo();
+      window.location.reload();
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  if (!asking)
+    return (
+      <button type="button" onClick={() => setAsking(true)} className={`${button} mt-4 border-2 border-paper/60 text-paper hover:bg-white/10`}>
+        Reset the demo
+      </button>
+    );
+  return (
+    <div role="group" aria-labelledby="reset-demo" className="mt-4 rounded-md border-2 border-paper/40 p-4">
+      <p id="reset-demo" className="text-[0.9375rem] text-paper">
+        This clears every approved change and the owner passphrase, so the suggestions come back. Your decisions on the findings stay: sign the review again
+        and set a new passphrase.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button type="button" onClick={reset} disabled={busy} className={`${button} bg-paper text-ink hover:bg-check disabled:opacity-60`}>
+          {busy ? "Resetting…" : "Yes, reset the demo"}
+        </button>
+        <button type="button" onClick={() => setAsking(false)} disabled={busy} className={`${button} text-paper underline underline-offset-4 hover:bg-white/10`}>
+          Cancel
+        </button>
+      </div>
+      {error && (
+        <p role="alert" className="mt-2 text-sm font-bold text-paper">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function Footer() {
   return (
@@ -46,6 +97,7 @@ export function Footer() {
               <li key={note}>{note}</li>
             ))}
           </ul>
+          <ResetDemo />
         </div>
       </div>
 

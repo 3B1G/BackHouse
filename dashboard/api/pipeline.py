@@ -205,11 +205,14 @@ def _orchestrate(run):
         _check(run, "orchestrator", "pass", "Changes dry-ran each one and saved it for your approval; nothing was applied")
         _check(run, "orchestrator", "pending", "You approve or decline each change on the dashboard; approving needs your owner passphrase")
     else:
-        _check(run, "orchestrator", "pass", "No change the forecast supports right now")
+        waiting = len(plan.get("upcoming") or [])
+        _check(run, "orchestrator", "pass", f"Nothing new: you approved every change it found ({waiting} start soon)" if waiting
+               else "No change the forecast supports right now")
     run.emit(type="plan", plan=plan)
     span.done(f"Suggested {len(fixes)} change{'' if len(fixes) == 1 else 's'}")
     _step(run, "orchestrator", "done", f"Suggested {len(fixes)} change{'' if len(fixes) == 1 else 's'} that help your cash"
-          if fixes else "No change helps your cash right now", fixes=len(fixes))
+          if fixes else "Nothing new to suggest: you approved every change it found" if plan.get("upcoming")
+          else "No change helps your cash right now", fixes=len(fixes))
 
 
 def _execute(run, upload):

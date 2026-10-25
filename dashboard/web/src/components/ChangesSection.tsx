@@ -363,8 +363,10 @@ export function ChangesSection({
   const orphan = !!focus && !!plan && plan.stage?.stage === "Suggest" && !fixes.some((fx) => fx.dish === focus.dish);
   const orphanBox = useRef<HTMLDivElement>(null);
   useKeepInView(orphanBox, orphan);
+  // Nothing left to suggest because the owner already approved it all: say that, not "nothing helps".
+  const approved = plan && plan.stage?.stage === "Suggest" && !fixes.length && !orphan ? (plan.upcoming ?? []) : [];
   const note = plan
-    ? fixes.length || orphan
+    ? fixes.length || orphan || approved.length
       ? null
       : plan.stage?.stage === "Audit"
         ? `The orchestrator suggests changes once the Bookkeeper has checked your books. ${plan.stage.why ?? ""}`
@@ -394,6 +396,30 @@ export function ChangesSection({
           The orchestrator forecast each change against your cash and nearby menu prices, and every one passed a dry run. Approve the ones you want, set your own
           price, or decline: nothing changes until you approve.
         </p>
+      )}
+      {approved.length > 0 && (
+        <div className="mt-4 rounded-lg border-2 border-dashed border-rule p-6">
+          <p className="max-w-[60ch] text-[1.0625rem] font-bold text-ink">
+            You've approved every change the orchestrator found, so there's nothing new to suggest.
+          </p>
+          <ul className="mt-3 space-y-1.5 text-[1.0625rem] text-carbon">
+            {approved.map((c) => (
+              <li key={`${c.dish}|${c.kind}`} className="flex items-start gap-2">
+                <IconCheck aria-hidden="true" size={20} className="mt-0.5 shrink-0 text-ink" />
+                <span>
+                  <strong className="text-ink">{c.dish}</strong>
+                  {c.kind === "price" && c.new_price_cents != null
+                    ? `: ${c.old_price_cents != null ? `${price(c.old_price_cents)} to ` : "now "}${price(c.new_price_cents)}`
+                    : `: ${c.available ? "back on" : "off"} the menu`}
+                  , from {mediumDate(c.starts)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-3 max-w-[62ch] text-[0.9375rem] text-pencil">
+            The orchestrator looks again with every check. To show the suggestions again for a demo, use "Reset the demo" at the bottom of this page.
+          </p>
+        </div>
       )}
       {orphan && focus && (
         <div ref={orphanBox} className="mt-4 rounded-lg border-2 border-ink p-5">

@@ -47,6 +47,15 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; o
     setFailed(null);
     setShown(null);
     let started: number | null = null;
+    let asked = false;
+    // A check that finished a while ago (back from the Chat, a reload, a demo reset, the API restarted): the owner may
+    // have signed, approved or declined since, so its saved plan is not shown; the orchestrator's plan as it is now is.
+    const old = (t: number) => started !== null && Date.now() / 1000 - started - t > 5;
+    const askNow = () => {
+      if (asked || focus) return; // arriving from the Chat already asks
+      asked = true;
+      refreshPlan();
+    };
     return followRun(
       runId,
       (e) => {
@@ -57,12 +66,12 @@ export function Dashboard({ view, onRestaurant }: { view: "dashboard" | "how"; o
           setSteps((s) => ({ ...s, [e.step]: e }));
           if (e.forecast) setShown(e.forecast);
         } else if (e.type === "finding") setFindings((f) => [...f, e.finding]);
-        else if (e.type === "plan") setPlan(e.plan);
-        else if (e.type === "done") {
+        else if (e.type === "plan") {
+          if (old(e.t)) askNow();
+          else setPlan(e.plan);
+        } else if (e.type === "done") {
           setFinished(true);
-          // A check that finished a while ago (back from the Chat, or the API restarted): the owner may have signed,
-          // approved or declined since, so ask the orchestrator for its suggestions as they are now.
-          if (started && Date.now() / 1000 - started - e.t > 5 && !focus) refreshPlan();
+          if (old(e.t)) askNow();
         } else if (e.type === "error") setFailed(`${e.text}. Nothing was changed.`);
       },
       () => setFailed("Lost the connection to the check. Start it again to see fresh results."),

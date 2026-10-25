@@ -153,7 +153,19 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
     return ahead[ahead.length - 1][key];
   };
 
-  // Each path's run-out marker sits on that path; its name goes in the first nearby corner that is free.
+  /** Where a path's drawn line first crosses $0, read between paydays; null if it stays above. */
+  const crossing = (key: "lo" | "y" | "hi") => {
+    for (let i = 1; i < ahead.length; i++) {
+      const a = ahead[i - 1][key];
+      const b = ahead[i][key];
+      if (a >= 0 && b < 0) return ahead[i - 1].t + ((ahead[i].t - ahead[i - 1].t) * a) / (a - b);
+    }
+    return null;
+  };
+
+  // Each path's run-out marker sits where that path's line crosses $0, so it is on the line and on the $0 rule at once
+  // (the line is drawn from paydays, so on the day itself it is already below $0; the row under the chart gives the
+  // exact day from the day-by-day futures). Its name goes in the first nearby corner that is free.
   const zoneLabelY = Math.min(H - M.bottom - 8 * s, zero + 18 * s);
   const taken: Box[] =
     zero < H - M.bottom ? [{ l: M.left + 4, t: zoneLabelY - lineH, r: M.left + 14 + 11 * charW, b: zoneLabelY + 4 }] : [];
@@ -166,8 +178,9 @@ function Plot({ f, pts, lastPast }: { f: Forecast; pts: Point[]; lastPast: numbe
   )
     .filter((m) => m.date !== null && time(m.date) >= ahead[0].t && time(m.date) <= x1)
     .map((m) => {
-      const t = time(m.date as string);
-      return { ...m, cx: x(t), cy: clampY(valueAt(t, m.key)) };
+      const hit = crossing(m.key);
+      const t = hit ?? time(m.date as string);
+      return { ...m, cx: x(t), cy: hit !== null ? zero : clampY(valueAt(t, m.key)) };
     });
   for (const m of runouts) taken.push({ l: m.cx - 6, t: m.cy - 6, r: m.cx + 6, b: m.cy + 6 });
   const marks = runouts.map((m) => {

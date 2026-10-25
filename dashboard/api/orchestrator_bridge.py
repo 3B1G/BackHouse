@@ -149,6 +149,25 @@ def decline(fx):
     tracelog.emit("Orchestrator", "result", f"Owner declined: {fx.get('title') or fx.get('id')}; nothing was changed", "owner")
 
 
+def reset_demo():
+    """The footer's "Reset the demo": the price database is rebuilt (every approval and the owner key go), the dashboard's
+    declines are forgotten, and the forecast goes back to the records as they are until the review is signed again. The
+    owner's decisions on the findings are kept."""
+    import forecast
+
+    span = tracelog.Span("Changes", "Demo reset: rebuilding the price database", "owner")
+    try:
+        out = run("reset", "owner")
+    except OrchestratorError as e:
+        span.fail(str(e)[:200])
+        raise
+    DECLINED.unlink(missing_ok=True)
+    forget()
+    forecast.use_inputs([], None)
+    span.done("Approvals and the owner passphrase are cleared; the decisions on the findings are kept")
+    return out
+
+
 def _fresh(mode, group):
     """A read-only driver mode, run at most once a minute (the Chat asks on every question)."""
     with _FRESH_LOCK:
@@ -225,5 +244,8 @@ def plan(brief):
             "positions": [{k: p.get(k) for k in fields} for p in market.get("positions", [])],
         },
         "fixes": fixes,
+        "upcoming": [{"dish": c.get("item"), "kind": c.get("kind"), "new_price_cents": c.get("price_cents"),
+                      "old_price_cents": (dishes.get(c.get("item")) or {}).get("price_cents"),
+                      "available": c.get("available"), "starts": c.get("effective_from")} for c in brief.get("upcoming") or []],
         "brief": brief.get("text"),
     }

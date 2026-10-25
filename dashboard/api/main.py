@@ -195,6 +195,20 @@ def owner_decline(d: Decline):
     return {"ok": True}
 
 
+class DemoReset(BaseModel):
+    confirm: Literal["reset the demo"]                # said in the body, so nothing resets by accident
+
+
+@app.post("/api/demo/reset")
+def demo_reset(r: DemoReset):
+    """The footer's "Reset the demo" (orchestrator_bridge.reset_demo): clears the approvals and the owner passphrase on
+    the sample restaurant, keeping the decisions on the findings, so the demo can show the suggestions again."""
+    try:
+        return orchestrator_bridge.reset_demo()
+    except orchestrator_bridge.OrchestratorError as e:
+        raise HTTPException(400, str(e)[:300])
+
+
 @app.post("/api/owner/plan")
 def owner_plan():
     """The orchestrator's brief again, after a review or an approval: the stage now, and the suggestions it opens."""
