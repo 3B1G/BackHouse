@@ -422,10 +422,18 @@ export function Chat({ restaurant, onRestaurant }: { restaurant: string | null; 
             placeholder={needSetup ? "Add your data above to start asking" : "Type a question"}
             className="min-h-12 flex-1 resize-none rounded-md border-2 border-rule bg-paper px-3 py-2.5 text-[1.0625rem] text-carbon placeholder:text-pencil focus:border-ink focus:outline-none"
           />
-          {/* Send, and while it answers, stop: the arrow and the square swap in place. */}
+          {/* Send, and while it answers, stop: the arrow and the square swap in place. Stopping cancels the click itself:
+              by the time the browser acts on it, this is a send button again, with the question back in the box. */}
           <button
             type={busy ? "button" : "submit"}
-            onClick={busy ? stop : undefined}
+            onClick={
+              busy
+                ? (e) => {
+                    e.preventDefault();
+                    stop();
+                  }
+                : undefined
+            }
             disabled={!busy && (needSetup || !draft.trim())}
             aria-label={busy ? "Stop the answer" : "Send"}
             title={busy ? "Stop (Esc)" : "Send"}
