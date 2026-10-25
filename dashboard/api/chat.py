@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 from core import env_value, readiness
+import bookkeeper_run
 import bookkeeper_tools as T
 import contracts as K
 import forecast
@@ -64,15 +65,25 @@ OPEN_CHANGE = {
 }
 DISH = re.compile(r"^[A-Za-z0-9 &'(),.-]{1,80}$")
 
-OPEN_BOOKKEEPER = {
-    "name": "open_bookkeeper",
-    "description": "Put the Bookkeeper's card under your answer, where the owner runs it: it checks for bank days it hasn't "
-                   "looked at and, only if there are any, re-checks the books and writes a new report. Call it whenever the "
-                   "owner asks for a new Bookkeeper report, to run or rerun the Bookkeeper, or to check the books again: you "
-                   "can't start it yourself.",
+RUN_BOOKKEEPER = {
+    "name": "run_bookkeeper",
+    "description": "Run the Bookkeeper for the owner: it checks for bank days it hasn't looked at. With none (the usual case) "
+                   "it's done in a moment and spends nothing. With new days, a full check takes up to 20 minutes and uses "
+                   "ASI:One credits, so it waits for the owner's OK on its card under your answer. Call it whenever the "
+                   "owner asks to run or rerun the Bookkeeper, for a new Bookkeeper report, or to check the books again.",
     "input_schema": {"type": "object", "additionalProperties": False, "required": [], "properties": {}},
 }
-LINK_TOOLS = ("open_change", "open_bookkeeper")  # they put a button or a card under the answer; they look nothing up
+LINK_TOOLS = ("open_change", "run_bookkeeper")   # they put a button or a card under the answer; they look nothing up
+# The owner asking for the Bookkeeper's run. The Chat runs it before the model answers, so it never hangs on the model
+# remembering the tool (it has said "I've put its card below" without calling it).
+BOOKKEEPER_ASK = re.compile(
+    r"\b(?:re-?run|run|start|launch|kick\s+off|trigger|update)\b(?:\W+\w+){0,2}?\W+book\s*-?\s*keep"   # run the Bookkeeper
+    r"|\bbook\s*-?\s*keep\w*\s+(?:run|again)\b"                                              # have the Bookkeeper run again
+    r"|\b(?:new|fresh|another)\s+(?:book\s*-?\s*keep\w*\s+)?report\b"                          # a new (Bookkeeper) report
+    r"|\b(?:re-?check|check|look\s+(?:at|over))\s+(?:the|my|our)\s+books\b",                    # check the books (again)
+    re.I)
+# The model saying the Bookkeeper's card is under its answer: then it is, even if it skipped the tool.
+CARD_CLAIM = re.compile(r"\bcard\b[^.!?\n]{0,40}\b(?:below|under)\s+(?:your|this|my)\s+answer\b", re.I)
 
 MENU = {
     "name": "get_menu",
@@ -97,7 +108,7 @@ LABELS = {
     "run_what_if": "Running a what-if on 1,000 futures",
     "try_menu_change": "Asking the orchestrator to rerun 1,000 futures",
     "open_change": "Finding that change on your dashboard",
-    "open_bookkeeper": "Getting the Bookkeeper ready",
+    "run_bookkeeper": "Running the Bookkeeper",
     "get_menu": "Reading your menu",
 }
 BANK = {"get_bank_transaction", "search_bank_transactions", "get_payee_history", "get_bank_bills", "get_account_balances"}
@@ -109,7 +120,7 @@ class ChatError(Exception):
 
 def _functions():
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}}
-            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE, OPEN_BOOKKEEPER, MENU]]
+            for t in [*T.TOOLS, WHAT_IF, MENU_CHANGE, OPEN_CHANGE, RUN_BOOKKEEPER, MENU]]
 
 
 def _paydays(f):
@@ -230,11 +241,33 @@ def _open_change(args):
                     "your answer takes them to it on the dashboard, where they set the price and approve or decline it."}
 
 
-def _open_bookkeeper():
-    """The Bookkeeper's card under the answer (bookkeeper_run.py), where the owner starts it. It starts nothing."""
-    return {"action": "bookkeeper",
-            "note": "Nothing has started. Tell the owner you can't run the Bookkeeper yourself, and that the card under your "
-                    "answer does: it checks for bank days the Bookkeeper hasn't seen, and runs it only if there are any."}
+def _run_bookkeeper(cid=None):
+    """Runs the Bookkeeper's check for the owner (bookkeeper_run.py), with its card under the answer. When nothing is new
+    it starts at once and is free; a run that would spend ASI:One (new bank days) waits for the owner's OK on the card."""
+    card = {"action": "bookkeeper"}
+    if bookkeeper_run.job()["state"] == "running":
+        return {**card, "running": True, "note": "The Bookkeeper is already running. Say so in one sentence, and that its card "
+                                                 "under your answer shows it working."}
+    known = bookkeeper_run.coverage(fresh=True)
+    if not (known and known["available"]):
+        return {**card, "note": "The Bookkeeper hasn't made a report for this data yet. Its first run takes up to an hour, so "
+                                "it starts from the command line (orchestrator bookkeeper-setup). Tell the owner that."}
+    if known["days_behind"]:
+        return {**card, **known, "note": f"The bank has {known['days_behind']} day(s) the Bookkeeper hasn't checked. Checking "
+                                         "them takes up to 20 minutes and uses ASI:One credits, so it waits for the owner's "
+                                         "OK: tell them in one or two sentences that they start it on the card under your answer."}
+    try:
+        bookkeeper_run.start(by=cid, known=known)
+    except RuntimeError as e:
+        return {**card, "error": str(e)}
+    run = bookkeeper_run.wait(10)                    # nothing new: it's over in a second or two
+    if run["state"] == "running":
+        return {**card, "running": True, "note": "It's still checking. Tell the owner in one sentence that it's running, and "
+                                                 "that its card under your answer shows what it finds."}
+    return {**card, "result": run["result"], "says": run["note"], "checked_through": known["covered_through"],
+            "open_findings": known["open_findings"],
+            "note": "The Bookkeeper's run is over. Tell the owner in one or two short sentences what it says, with the date it "
+                    "has checked through. Its card under your answer shows the run."}
 
 
 def _size(out):
@@ -267,8 +300,8 @@ def _run_tool(name, raw_args, cid=None):
             out = _open_change(args)
         except (ValueError, TypeError):
             out = {"error": "That price doesn't look right."}
-    elif name == "open_bookkeeper":
-        out = _open_bookkeeper()
+    elif name == "run_bookkeeper":
+        out = _run_bookkeeper(cid)
     elif name == "get_menu":
         out = _menu(cid)
     else:
@@ -284,6 +317,10 @@ def _label(name, args):
 
 
 def _source(name, args):
+    if name == "run_bookkeeper":
+        return "Bookkeeper"
+    if name == "open_change":
+        return "Dashboard"
     if name in ("run_what_if", "try_menu_change"):
         return "Forecast"
     if name in BANK:
@@ -320,8 +357,9 @@ How to answer:
   a suggested change, or to set a dish's price, say in one sentence that you can't do it yourself, and call open_change
   with the dish (and their price, if they named one): they get a button to that change on the dashboard, where they set
   the price and approve or decline it. Never describe dashboard screens or steps from memory.
-- When the owner asks for a new Bookkeeper report, or to run the Bookkeeper or check the books again, say in one sentence
-  that you can't start it yourself, and call open_bookkeeper: its card under your answer is where they run it.
+- When the owner asks to run or rerun the Bookkeeper, for a new Bookkeeper report, or to check the books again, call
+  run_bookkeeper: it runs the Bookkeeper's check for them. Then say what its result says in one or two short sentences.
+  Never say you can't run it. If it already ran for this question, don't call it again.
 - When a tool result says a button is already under your answer, point to it in a few words; never offer to make one.
 - Lead with the answer. Keep it to 2 to 5 short sentences, and use a short bullet list only for several items.
 - Name where a number came from (the bank, your records, the forecast) when it matters.
@@ -438,8 +476,11 @@ def _reply(text, sources, links=(), sections=(), actions=()):
     text = (text or "").strip()
     if CODE.search(text):
         return _event(type="answer", text=OFF_TOPIC, sources=[], off_topic=True)
+    actions = list(actions)
+    if "bookkeeper" not in actions and CARD_CLAIM.search(text) and re.search(r"book\s*-?\s*keep", text, re.I):
+        actions.append("bookkeeper")
     return _event(type="answer", text=text, sources=list(dict.fromkeys(sources)), links=list(links)[:3],
-                  sections=list(sections), actions=list(actions))
+                  sections=list(sections), actions=actions)
 
 
 def answer(history):
@@ -463,6 +504,13 @@ def answer(history):
             return
         messages = [{"role": "system", "content": _system(cid)}, *clean]
         tools = _functions()
+        if BOOKKEEPER_ASK.search(clean[-1]["content"]):              # asked to run the Bookkeeper: it runs, then the model answers
+            call = {"id": "call_run_bookkeeper", "type": "function", "function": {"name": "run_bookkeeper", "arguments": "{}"}}
+            args, out = _run_tool("run_bookkeeper", "{}", cid)
+            yield _event(type="tool", text=_label("run_bookkeeper", args), source=_source("run_bookkeeper", args))
+            actions.append("bookkeeper")
+            messages += [{"role": "assistant", "content": "", "tool_calls": [call]},
+                         {"role": "tool", "tool_call_id": call["id"], "content": json.dumps(out, default=str)[:MAX_TOOL_CHARS]}]
         for _ in range(MAX_ROUNDS):
             msg = _ask(messages, tools, cid=cid)
             calls = msg.get("tool_calls") or []
@@ -473,8 +521,11 @@ def answer(history):
             messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
             for c in calls:
                 name = c["function"]["name"]
-                args, out = _run_tool(name, c["function"].get("arguments"), cid)
-                yield _event(type="tool", text=_label(name, args), source="Dashboard" if name in LINK_TOOLS else _source(name, args))
+                if name == "run_bookkeeper" and "bookkeeper" in actions:  # once per question
+                    args, out = {}, {"action": "bookkeeper", "note": "It already ran for this question: answer from that result."}
+                else:
+                    args, out = _run_tool(name, c["function"].get("arguments"), cid)
+                yield _event(type="tool", text=_label(name, args), source=_source(name, args))
                 if "link" in out and out["link"] not in links:          # a LINK_TOOLS button, or a what-if's
                     links.append(out["link"])
                 if out.get("action") and out["action"] not in actions:   # a LINK_TOOLS card
