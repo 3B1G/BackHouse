@@ -3,9 +3,10 @@ import { motion, useReducedMotion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { seconds, traceKey, type TraceEvent, type TraceKind } from "../trace";
 
-// Who calls whom, drawn as two tidy trees. You start a check (the Orchestrator calls five agents in order) or ask a
-// question (the Chat agent screens it, thinks with ASI:One and uses read-only tools). Each hub has one trunk and each agent
-// its own branch, so no two connections cross. Calls travel out as blue dots, answers come back as green ones.
+// Who calls whom, drawn as two tidy trees. You start a check (the Orchestrator calls six agents in order, then has Changes
+// dry-run the fixes it suggests) or ask a question (the Chat agent screens it, thinks with ASI:One and uses read-only
+// tools). Each hub has one trunk and each agent its own branch, so no two connections cross. Calls travel out as blue
+// dots, answers come back as green ones.
 
 type Kind = "you" | "hub" | "agent" | "later";
 type MapNode = { id: string; label: string; role: string; x: number; y: number; w: number; h: number; kind: Kind };
@@ -27,15 +28,15 @@ const VIEW_H = chatY(2) + 52;
 const agent = (id: string, role: string, y: number, kind: Kind = "agent"): MapNode => ({ id, label: id, role, x: AGENT.x, y, w: AGENT.w, h: AGENT.h, kind });
 const NODES: MapNode[] = [
   { id: "you", label: "User", role: "The owner", x: 70, y: YOU_Y, w: 110, h: 58, kind: "you" },
-  { id: "orchestrator", label: "Orchestrator", role: "Runs each check in order", x: HUB.x, y: ORCH_Y, w: HUB.w, h: HUB.h, kind: "hub" },
+  { id: "orchestrator", label: "Orchestrator", role: "Runs checks, suggests fixes", x: HUB.x, y: ORCH_Y, w: HUB.w, h: HUB.h, kind: "hub" },
   { id: "chat", label: "Chat agent", role: "Answers your questions", x: HUB.x, y: CHAT_Y, w: HUB.w, h: HUB.h, kind: "hub" },
   agent("Nessie", "Capital One's bank API", checkY(0)),
   agent("Records", "Builds the books", checkY(1)),
   agent("Matcher", "Bank against books", checkY(2)),
   agent("Bookkeeper", "Fetch.ai agent, checks findings", checkY(3)),
   agent("Forecaster", "Plays out 1,000 futures", checkY(4)),
-  agent("Market scout", "Built, not wired in yet", checkY(5), "later"),
-  agent("Changes", "Acts only on your approval", checkY(6), "later"),
+  agent("Market scout", "Prices on nearby menus", checkY(5)),
+  agent("Changes", "Dry runs; acts on your approval", checkY(6)),
   agent("Scope check", "Is it about your money?", chatY(0)),
   agent("ASI:One", "Fetch.ai's model", chatY(1)),
   agent("Tools", "12 read-only lookups", chatY(2)),
@@ -66,13 +67,12 @@ const fromYou = (to: string): Edge => ({
     [left(to), BY_ID[to].y],
   ],
 });
-// Later edges first, so the solid trunk is drawn over their dashed part.
+// The numbers are the check's order, as on How it works. Changes has none: it dry-runs the Orchestrator's own suggestions.
 const EDGES: Edge[] = [
-  branch("orchestrator", "Market scout", { later: true }),
-  branch("orchestrator", "Changes", { later: true }),
   fromYou("orchestrator"),
   fromYou("chat"),
-  ...["Nessie", "Records", "Matcher", "Bookkeeper", "Forecaster"].map((to, i) => branch("orchestrator", to, { badge: String(i + 1) })),
+  ...["Nessie", "Records", "Matcher", "Bookkeeper", "Forecaster", "Market scout"].map((to, i) => branch("orchestrator", to, { badge: String(i + 1) })),
+  branch("orchestrator", "Changes"),
   ...["Scope check", "ASI:One", "Tools"].map((to) => branch("chat", to)),
   {
     from: "Tools",
@@ -129,7 +129,7 @@ const BACK: TraceKind[] = ["result", "done", "waiting", "error"];
 /** Who an event is between: [caller, callee]. Calls go out along that connection; answers come back. */
 function route(e: TraceEvent): [string, string] | null {
   if (e.kind === "log" || e.kind === "check") return null;
-  if (e.agent === "Pipeline") return ["you", "orchestrator"];
+  if (e.agent === "Pipeline" || e.agent === "Orchestrator") return ["you", "orchestrator"];
   if (e.agent === "Chat") return e.kind === "call" || e.kind === "result" ? ["chat", "ASI:One"] : ["you", "chat"];
   if (e.agent === "Scope check" || e.agent === "Tools") return ["chat", e.agent];
   if (!BY_ID[e.agent]) return null;
@@ -278,7 +278,7 @@ export function AgentMap({ events, now }: { events: TraceEvent[]; now: number })
         viewBox={`0 0 1000 ${VIEW_H}`}
         className="mx-auto block h-auto w-full min-w-[46rem] max-w-[64rem]"
         role="img"
-        aria-label="When the user runs a check, the Orchestrator calls Nessie, Records, the Matcher, the Bookkeeper and the Forecaster in that order; Market scout and Changes join next. When the user asks a question, the Chat agent runs a scope check, thinks with ASI:One and uses read-only tools, including the Forecaster for what-ifs."
+        aria-label="When the user runs a check, the Orchestrator calls Nessie, Records, the Matcher, the Bookkeeper, the Forecaster and Market scout in that order, then has Changes dry-run the fixes it suggests. When the user asks a question, the Chat agent runs a scope check, thinks with ASI:One and uses read-only tools, including the Forecaster for what-ifs."
       >
         <text x={left("orchestrator")} y={ORCH_Y - HUB.h / 2 - 12} className="fill-pencil text-[13px] font-bold">
           When the user runs a check
