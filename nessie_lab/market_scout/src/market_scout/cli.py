@@ -72,9 +72,9 @@ def main():
         if command == "client":
             p.add_argument("--target", required=True, help="market scout agent address")
             p.add_argument("--port", type=int, default=8004)
-            p.add_argument("--endpoint", default="http://127.0.0.1:8003/submit")
+            p.add_argument("--endpoint", default="http://127.0.0.1:8006/submit")
     serve = commands.add_parser("serve")
-    serve.add_argument("--port", type=int, default=8003)
+    serve.add_argument("--port", type=int, default=8006)
     serve.add_argument("--local-only", action="store_true",
                        help="without MARKET_SCOUT_ALLOWED_SENDERS: take requests only from this machine's local client")
     serve.add_argument("--offline", action="store_true",

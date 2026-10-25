@@ -77,6 +77,9 @@ def make_root(tmp_path: Path) -> Path:
     con = sqlite3.connect(tmp_path / "data" / "books.db")
     con.execute(f"CREATE TABLE locations ({', '.join(HERE)})")
     con.execute(f"INSERT INTO locations VALUES ({', '.join('?' * len(HERE))})", list(HERE.values()))
+    con.execute("CREATE TABLE accounts (account, type, nickname, last4, opening_balance_cents INTEGER, opening_as_of)")
+    con.executemany("INSERT INTO accounts VALUES (?,?,?,?,?,?)",
+                    [(a, t, n.split(" |")[0], "0000", c, "2026-10-01") for a, _, t, n, c in ACCOUNTS])
     con.execute("CREATE TABLE menu_prices (item, course, channel, service, effective_from, price_cents)")
     con.executemany("INSERT INTO menu_prices VALUES (?,?,?,?,?,?)", MENU)
     con.executescript("""
@@ -148,8 +151,11 @@ class FakeForecaster:
                                                              "report_note": "fake"}))
         vs = None if scenario is None else K.VsBase(days_moved_likely=days, days_moved_average=float(days),
                                                     days_moved_worst=days, days_moved_best=days)
+        day = as_of or getattr(settings, "as_of", None) or date(2026, 10, 24)
+        self.calls[-1].update(as_of=as_of, settings_as_of=getattr(settings, "as_of", None), report_id=report_id,
+                              adjustments_given=adjustments)
         return K.ForecastResult(
-            forecast_id=fid, scenario=getattr(scenario, "name", None) or "base", as_of=date(2026, 10, 24),
+            forecast_id=fid, scenario=getattr(scenario, "name", None) or "base", as_of=day,
             starting_cash_cents=1_350_000, run_out_worst=likely - timedelta(days=90), run_out_likely=likely,
             run_out_best=None, share_running_out=0.947, safety_floor_cents=5_045_735,
             below_floor_likely=date(2027, 2, 21), trials=1000, horizon_months=24, seed=13,
@@ -172,7 +178,19 @@ def root(tmp_path, fake_forecast):
 
 
 @pytest.fixture
-def session(root):
+def open_gates(monkeypatch):
+    """For tests of the tools themselves (not of the stage gates): every stage is open, with no committed review, as
+    in the Suggest stage. Forecasts then use the cautious adjustments only. The gate tests (test_core_stages.py) never
+    use this."""
+    from orchestrator import stages
+
+    view = stages.StageView(stages.SUGGEST, "tests: gates opened by the open_gates fixture")
+    monkeypatch.setattr(stages, "current", lambda session: view)
+    return view
+
+
+@pytest.fixture
+def session(root, open_gates):
     from orchestrator.session import Session
     return Session(root)
 

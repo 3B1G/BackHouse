@@ -100,7 +100,9 @@ def plan(brief):
         })
     fields = ("our_item", "our_price_cents", "competitor_median_cents", "competitor_low_cents", "competitor_high_cents",
               "n_prices", "position", "gap_pct")
+    stage = facts.get("stage") or {}              # Audit > Review > Commit > Forecast > Suggest: fixes only in Suggest
     return {
+        "stage": {"stage": stage.get("stage"), "why": stage.get("why")} if stage else None,
         "as_of": cash.get("as_of"), "cash_cents": cash.get("total_cents"),
         "bills": {k: bills.get(k) for k in ("before", "count", "total_cents")} if "error" not in bills else None,
         "market": None if "error" in market else {

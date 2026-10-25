@@ -1,8 +1,17 @@
 """The orchestrator's tools, in OpenAI function-calling format (`TOOLS`), and `call(session, name, args)`.
 
 Stage 1, "what is going on?": get_cash_position, list_bills_due, lookup (the Bookkeeper's 11 read-only tools),
-get_findings, scan_market, get_menu, list_upcoming_changes, forecast_base, forecast_scenario.
+get_findings, scan_market, get_menu, list_upcoming_changes, forecast_base, forecast_scenario, bookkeeper_status.
+(Running the Bookkeeper, `orchestrator bookkeeper-setup` / `bookkeeper-update`, is the owner's; no tool does it.)
 Stage 2, "what do we do about it?": propose_fix (the Controller for one dish) and preview_suggestion.
+Owner review (review.py): review_status, propose_decision, propose_accept_verified_errors (proposals only).
+
+Stage gates (stages.py, STAGE_TOOLS below): Audit -> Review -> Commit -> Forecast -> Suggest, derived from disk on
+every call. `tools_for(session, owner)` is the list an LLM is offered right now, and `call` refuses any tool outside
+the current stage with a fixed message (nothing the caller sent is echoed). The forecast re-checks the stage itself
+(_inputs), always gets an explicit list of adjustments built from the owner's committed decisions and the review's
+as_of, and its result is dropped if the data moved while it ran. No tool records a commit: only the owner's
+passphrase-signed `changes approve` of the review suggestion does.
 
 Rules every tool keeps:
 - `call` never raises. A problem comes back as {"error": "..."}; arguments are validated against the tool's schema.
@@ -84,8 +93,10 @@ TOOLS: list[dict] = [
     _fn("lookup", "Run one of the Bookkeeper's read-only tools (bank rows, payee history, costs, agreements, card "
         "batches, deposit slips, delivery payouts). `args` are that tool's own arguments.",
         {"tool": {"type": "string", "enum": BK_TOOL_NAMES}, "args": {"type": "object"}}, ["tool"]),
-    _fn("get_findings", "The latest Bookkeeper report (data/reports/R-*.json): findings, the adjustments they imply, "
-        "what was rejected, and which adjustments the forecast uses. {'available': false} when there is none."),
+    _fn("get_findings", "The Bookkeeper's open findings (merged from every report ingested since the one-time "
+        "backfill, else the latest data/reports/R-*.json): findings, the adjustments they imply, what was rejected, "
+        "whether each was verified by the Bookkeeper's own Verifier (verification_label), which adjustments the "
+        "forecast uses, and how far the Bookkeeper's coverage runs. {'available': false} when there is none."),
     _fn("scan_market", "Market scout: our dish prices against relevant nearby competitors (offline: saved menu pages). "
         "Positions, competitor medians, approved upcoming changes, and the report file.",
         {"items": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 80}, "maxItems": 50,
@@ -108,8 +119,30 @@ TOOLS: list[dict] = [
         ["dish"]),
     _fn("preview_suggestion", "Re-run CH's dry-run plan for a saved suggestion and show the question CH will ask.",
         {"path": {"type": "string", "minLength": 1}}, ["path"]),
+    _fn("bookkeeper_status", "Read-only: how far the Bookkeeper's review runs (baseline, covered through, days behind "
+        "the bank, open / not re-reported / resolved finding counts, last run). Running the Bookkeeper is the "
+        "owner's job at the terminal (orchestrator bookkeeper-update); no tool starts it."),
+    _fn("review_status", "Read-only: the current stage (Audit, Review, Commit, Forecast, Suggest) and why, every open "
+        "finding with its proposed decision, the batch of verified errors, and the owner's next command."),
+    _fn("propose_decision", "Review stage: PROPOSE the owner's decision on ONE open finding (accept: its adjustment "
+        "counts; dismiss: none; revise: back to the Bookkeeper). Only a proposal: the owner commits the review at the "
+        "terminal. A note is kept only if the owner wrote it in this chat; a new figure in it forces revise. At most "
+        "one per turn.", {"finding": {"type": "string", "minLength": 1, "maxLength": 80, "description": "finding_id"},
+                          "decision": {"type": "string", "enum": ["accept", "dismiss", "revise"]},
+                          "note": {"type": "string", "maxLength": 500}}, ["finding", "decision"]),
+    _fn("propose_accept_verified_errors", "Review stage: PROPOSE accept for every open finding the Bookkeeper's "
+        "Verifier agreed is an error (code picks them; no arguments). needs_owner findings are left for the owner."),
 ]
 SPECS = {t["function"]["name"]: t["function"] for t in TOOLS}
+ALWAYS = ("bookkeeper_status", "get_cash_position", "list_bills_due", "review_status")
+READING = ("get_findings", "lookup")
+FORECASTS = ("forecast_base", "forecast_scenario", "get_menu", "list_upcoming_changes")
+STAGE_TOOLS = {"Audit": frozenset(ALWAYS),
+               "Review": frozenset(ALWAYS + READING + ("propose_decision", "propose_accept_verified_errors")),
+               "Commit": frozenset(ALWAYS + READING),
+               "Forecast": frozenset(ALWAYS + READING + FORECASTS),
+               "Suggest": frozenset(ALWAYS + READING + FORECASTS + ("scan_market", "propose_fix", "preview_suggestion"))}
+OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion", "propose_decision", "propose_accept_verified_errors"))
 
 
 class Refusal(ValueError):
@@ -168,6 +201,39 @@ def _check(schema: dict, value, where: str):
     return value
 
 
+# ---------------------------------------------------------------- stages
+def stage(session):
+    from . import stages
+    return stages.current(session)
+
+
+def allowed(session, name: str) -> bool:
+    """May `name` run in the current stage?"""
+    return name in STAGE_TOOLS.get(stage(session).stage, ())
+
+
+def tools_for(session, owner: bool = True) -> list[dict]:
+    """The tools an LLM is offered right now: this stage's, minus the owner-only ones for a non-owner."""
+    names = STAGE_TOOLS.get(stage(session).stage, frozenset())
+    return [t for t in TOOLS if t["function"]["name"] in names and (owner or t["function"]["name"] not in OWNER_ONLY)]
+
+
+def stage_line(session) -> str:
+    from . import stages
+    return stages.line(session)
+
+
+def _gate(session, name: str):
+    view = stage(session)
+    if name not in STAGE_TOOLS.get(view.stage, ()):
+        raise Refusal(f"{name} is not available in the {view.stage} stage: {view.why}")
+
+
+def _locked():
+    from . import review, stages
+    return (stages.StageLocked, review.ReviewError)
+
+
 # ---------------------------------------------------------------- the entry points
 _STOP = contextvars.ContextVar("orchestrator_tools_stop", default=None)
 
@@ -201,12 +267,13 @@ def call(session: Session, name: str, args: dict) -> dict:
             raise Refusal(f"unknown tool; tools: {', '.join(SPECS)}")
         if _expired(_STOP.get()):
             raise Refusal("the turn ran out of time: nothing was run")
+        _gate(session, name)
         clean = _check(spec["parameters"], {} if args is None else args, "args")
         with env.LOCK:
             env.bind(session.root, session.tag)
             result = displayed(HANDLERS[name](session, **{k: v for k, v in clean.items() if v is not None}))
         json.dumps(result)
-    except Refusal as exc:
+    except (Refusal, *_locked()) as exc:
         result = {"error": str(exc)}
     except Exception as exc:                              # report to the caller (an LLM loop) instead of crashing it
         LOG.warning("tool %s failed", name, exc_info=True)  # the message may carry paths or input: log, don't return
@@ -287,26 +354,92 @@ def latest_report(session: Session) -> Path | None:
     return reports[-1] if reports else None
 
 
-def _load_report(path: Path):
+def _load_report(path, source=None, verified=None):
+    """A report file (or `source`, a report dict from bk_state.open_findings_report, labelled `path`, with
+    `verified` = bk_state.open_verification) -> (path, findings, adjustments, rejected, checks, passed, verification).
+    The checks are checks_bk's: with no owner decisions every finding awaits the owner (cautious adjustments only);
+    `verification` is what the Bookkeeper's Verifier loop said, as information."""
     import bookkeeper_tools as bt
     import contracts as K
 
-    from .checks_interim import check_findings
+    from . import checks_bk
 
-    findings, adjustments, rejected = K.from_bk_report(path, bt.bank_id_map())
+    if source is None:
+        raw = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        if not isinstance(raw, dict):
+            raise ValueError("report is not a JSON object")
+    else:
+        raw = source
+    findings, adjustments, rejected = K.from_bk_report(raw, bt.bank_id_map())
     if not isinstance(findings, list) or not isinstance(adjustments, list) or not isinstance(rejected, dict):
         raise ValueError("report did not convert to findings")
-    checks = check_findings(findings)
+    checks = checks_bk.check_findings(raw, findings, verified=verified)      # no owner decisions here yet
     passed = K.passed_adjustments(adjustments, checks)
-    json.dumps(displayed({"f": findings, "a": adjustments, "r": rejected, "c": checks, "p": passed}))
-    return (path, findings, adjustments, rejected, checks, passed)
+    verification = checks_bk.summary(raw, verified)
+    json.dumps(displayed({"f": findings, "a": adjustments, "r": rejected, "c": checks, "p": passed, "v": verification}))
+    return (path, findings, adjustments, rejected, checks, passed, verification)
+
+
+class _Label(str):
+    """Stands in for a report path where only `.name` is read: the merged state's label."""
+    @property
+    def name(self):
+        return str(self)
+
+
+def _state(session: Session):
+    """(state, latest bank date, error) for data/orchestrator/bookkeeper_state.json; state is None when there is
+    none (or it is unreadable: then `error` says why)."""
+    from . import bk_runner, bk_state
+
+    try:
+        state = bk_state.load(session.root)
+    except bk_state.StateError as exc:
+        return None, None, str(exc)
+    if state is None or not state.get("covered_through"):
+        return None, None, None
+    return state, bk_runner.latest_bank_date(session.root, session.tag), None
+
+
+def _merged(session: Session, state):
+    """The findings tuple from the merged state's OPEN findings (bk_state.open_findings_report)."""
+    from . import bk_state
+
+    st = bk_state.state_path(session.root).stat()
+    key = ("findings-state", st.st_mtime_ns, st.st_size)
+    if key not in session.cache:
+        label = _Label(f"{bk_state.STATE_NAME}, merged from {len(state['reports'])} report(s)")
+        session.cache[key] = _load_report(label, bk_state.open_findings_report(state),
+                                          bk_state.open_verification(state))
+    return session.cache[key]
+
+
+def _coverage(state, latest) -> dict:
+    from . import bk_state
+
+    behind = bk_state.days_behind(state, latest)
+    view = {"baseline_as_of": (state.get("baseline") or {}).get("as_of"), "covered_through": state["covered_through"],
+            "latest_bank_date": latest.isoformat() if latest else None, "days_behind": behind,
+            "reports_ingested": len(state["reports"]), "counts": bk_state.counts(state)}
+    view["note"] = (f"Bookkeeper covers through {state['covered_through']}, {behind} day(s) behind the bank; the "
+                    "owner runs `orchestrator bookkeeper-update`" if behind else
+                    f"Bookkeeper covers through {state['covered_through']}, up to date with the bank")
+    return view
 
 
 def _findings(session: Session):
-    """((report path, findings, adjustments, rejected, checks, passed adjustments) or None, [bad reports]).
+    """((report path, findings, adjustments, rejected, checks, passed adjustments, verification) or None,
+    [bad reports]).
 
-    The newest valid report wins; a report a peer named (session.preferred_report) is tried first. A report that
-    can't be read or converted never breaks a tool: it is listed as rejected and the previous valid one is used."""
+    The merged Bookkeeper state (bk_state) wins when it exists: its open findings only. Otherwise the newest valid
+    report wins; a report a peer named (session.preferred_report) is tried first. A report that can't be read or
+    converted never breaks a tool: it is listed as rejected and the previous valid one is used."""
+    state, _, _ = _state(session)
+    if state is not None:
+        try:
+            return _merged(session, state), []
+        except Exception as exc:                          # fall back to the reports themselves
+            LOG.warning("merged Bookkeeper state not usable (%s); using the latest report", type(exc).__name__)
     preferred = report_name(getattr(session, "preferred_report", None))
     order = list(reversed(_report_files(session)))
     order.sort(key=lambda p: p.name != preferred)        # stable: the named one first, then newest first
@@ -327,15 +460,6 @@ def _findings(session: Session):
             continue
         return got, bad
     return None, bad
-
-
-def _adjustments(session: Session) -> tuple[list, str]:
-    got, _ = _findings(session)
-    if got is None:
-        return [], "no Bookkeeper report yet: history used as the bank shows it"
-    path, *_, passed = got
-    return passed, (f"{len(passed)} cautious adjustment(s) from {path.name} (interim checks: every finding "
-                    "downgraded to the owner until checks.py exists)")
 
 
 def _round_dollar(cents: int) -> int:
@@ -372,10 +496,12 @@ def get_cash_position(session: Session) -> dict:
     import bookkeeper_tools as bt
 
     r = bt.get_account_balances(session.as_of.isoformat() if session.as_of else None)
-    total = r["total_cents"] if "total_cents" in r else r["total_balance_cents"]    # bookkeeper_tools renamed it in #14
+    if "error" in r:                                      # e.g. as_of outside the opening balances / cutoff
+        raise ValueError(r["error"])
+    total = r["total_cents"] if "total_cents" in r else r["total_balance_cents"]   # shared impl / pre-#14 wrapper
     return {"as_of": r["as_of"], "total_cents": int(total), "source": bt.BANK_DB.name,
-            "accounts": [{"account": a["account"], "nickname": a["nickname"], "balance_cents": int(a["balance_cents"])}
-                         for a in r["accounts"]]}
+            "accounts": [{"account": a["account"], "nickname": a.get("nickname") or a["account"],
+                          "balance_cents": int(a["balance_cents"])} for a in r["accounts"]]}
 
 
 def list_bills_due(session: Session, before: str | None = None) -> dict:
@@ -407,15 +533,36 @@ def lookup(session: Session, tool: str, args: dict | None = None) -> dict:
 
 def get_findings(session: Session) -> dict:
     got, bad = _findings(session)
+    state, latest, state_error = _state(session)
+    extra = {"state_error": state_error} if state_error else {}
     if got is None:
-        return {"available": False, "rejected_reports": bad,
+        return {"available": False, "rejected_reports": bad, **extra,
                 "why": ("no readable Bookkeeper report" if bad else "no Bookkeeper report yet") +
                        " (data/reports/R-*.json is written by the Bookkeeper on the bk branch)"}
-    path, findings, adjustments, rejected, checks, passed = got
+    path, findings, adjustments, rejected, checks, passed, ver = got
+    if state is not None and isinstance(path, _Label):
+        coverage = _coverage(state, latest)
+        extra.update(source="merged Bookkeeper state", coverage=coverage, coverage_note=coverage["note"])
+    else:
+        extra["source"] = "latest Bookkeeper report"
     return {"available": True, "report": path.name, "findings": findings, "adjustments": adjustments,
-            "rejected": rejected, "rejected_reports": bad, "checks": checks, "forecast_uses": passed,
-            "checks_note": "interim checks (checks_interim.py) until checks.py exists: every finding is downgraded to "
-                           "the owner, so only cautious adjustments (money owed, an ongoing overcharge) reach the forecast"}
+            "rejected": rejected, "rejected_reports": bad, "checks": checks, "forecast_uses": passed, **extra,
+            "verification": ver, "verification_label": ver["label"],
+            "checks_note": ("checks_bk: the owner decides every finding (accept, dismiss or revise); until then "
+                            "each awaits the owner, so only cautious adjustments (money owed, an ongoing overcharge, "
+                            "never as recoverable) reach the forecast. `verification` says what the Bookkeeper's "
+                            "Verifier found, as information for the owner; it never accepts a finding")}
+
+
+def bookkeeper_status(session: Session) -> dict:
+    """Read-only: never runs the Bookkeeper, never repairs the state file."""
+    from . import bk_runner, bk_state
+
+    try:
+        state = bk_state.load(session.root, recover=False)
+    except bk_state.StateError as exc:
+        return {"available": False, "why": str(exc)}
+    return bk_state.status_view(state, bk_runner.latest_bank_date(session.root, session.tag))
 
 
 def _market_view(session: Session, report, filename: str, service: str) -> dict:
@@ -470,6 +617,7 @@ def adopt_market_report(session: Session, filename, request_id: str | None = Non
     from market_scout.contracts import MarketReport
 
     try:
+        _gate(session, "scan_market")
         name = market_name(filename)
         if name is None:
             raise Refusal("the scout named a report file outside data/market_reports")
@@ -513,9 +661,46 @@ def list_upcoming_changes(session: Session, on: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------- forecasts
-def _settings(session: Session):
+def _inputs(session: Session):
+    """(view, adjustments, note, as_of) for a forecast: the stage re-checked here (a second layer behind call()),
+    adjustments ALWAYS an explicit list from the owner's committed decisions, as_of the review's."""
+    from . import review, stages
+
+    view = stages.require(session, stages.FORECAST)
+    adjustments, note = review.adjustments(session, view)
+    as_of = date.fromisoformat(view.as_of) if view.as_of else session.as_of
+    if view.as_of and session.as_of and session.as_of != as_of:
+        raise Refusal(f"--as-of conflicts with the review's as_of {view.as_of}: forecasts use the review's date")
+    return view, adjustments, note, as_of
+
+
+def _unchanged(session: Session, view):
+    """Recompute the data fingerprint fully; Refusal if it moved since the audit (the forecast is not used)."""
+    from . import stages
+
+    if view.review_id is None or view.fingerprint is None:
+        return
+    fp = stages.fingerprint(session.root, session.tag, view.as_of, fresh=True)
+    if any(fp.get(k) != view.fingerprint.get(k) for k in stages.FP_PARTS):
+        raise Refusal("the data changed since the audit: the forecast was not used; the owner runs "
+                      "`orchestrator bookkeeper-update`")
+
+
+def _run(session: Session, scenario, adjustments, view, as_of):
+    """run_forecast with an explicit list (never None: None would let the forecaster load a report itself), the
+    review's as_of in both places, never report_id; dropped if the data moved during the run."""
     import contracts as K
-    return K.ForecastSettings(as_of=session.as_of)
+    import forecaster as F
+
+    if not isinstance(adjustments, list):
+        raise Refusal("no adjustments list: refusing to let the forecaster read a report by itself")
+    _unchanged(session, view)
+    fr = F.run_forecast(scenario, adjustments=adjustments, settings=K.ForecastSettings(as_of=as_of), as_of=as_of,
+                        save=True)
+    if as_of is not None and fr.as_of != as_of:
+        raise Refusal("the forecaster used another as_of than the review's: the result was not used")
+    _unchanged(session, view)
+    return fr
 
 
 def _detail(forecast_id: str) -> dict:
@@ -538,18 +723,24 @@ def _chart(session: Session, path) -> str | None:
 
 
 def _base(session: Session) -> dict:
-    """The base forecast for this session's settings and adjustments, run once per session (deterministic seed)."""
-    import forecaster as F
+    """The base forecast for the committed review (its decisions and as_of), run once per session (deterministic
+    seed). Recording it opens the Suggest stage."""
+    from . import review
 
-    adjustments, note = _adjustments(session)
-    key = ("base", str(session.as_of), json.dumps([a.model_dump(mode="json") for a in adjustments], sort_keys=True))
+    view, adjustments, note, as_of = _inputs(session)
+    key = ("base", str(as_of), view.digest, json.dumps([a.model_dump(mode="json") for a in adjustments],
+                                                       sort_keys=True))
     if key not in session.cache:
         may_write(session)                                 # run_forecast(save=True) writes data/forecasts/<id>.json
-        fr = F.run_forecast(None, adjustments=adjustments, settings=_settings(session), save=True)
+        fr = _run(session, None, adjustments, view, as_of)
+        if view.review_id is not None and view.digest:
+            review.record_base_forecast(session, view, fr.forecast_id)
         out = _view(fr)
         out["chart_path"] = _chart(session, out["chart_path"])
         out["adjustments_used"] = [{"finding_id": a.finding_id, "kind": a.kind} for a in adjustments]
         out["adjustments_note"] = note
+        out["provenance"] = {"review_id": view.review_id, "decisions": view.digest[:16] if view.digest else None,
+                             "as_of": view.as_of, "report": view.report}
         out["report_note"] = _detail(fr.forecast_id).get("report_note")
         session.cache[key] = out
     return session.cache[key]
@@ -564,7 +755,6 @@ def forecast_base(session: Session) -> dict:
 
 def forecast_scenario(session: Session, scenario: dict) -> dict:
     import contracts as K
-    import forecaster as F
 
     try:
         sc = K.Scenario.model_validate(scenario)
@@ -576,12 +766,14 @@ def forecast_scenario(session: Session, scenario: dict) -> dict:
     if sc == K.Scenario(name=sc.name):
         raise Refusal("the scenario changes nothing; for the base case use forecast_base")
     base = _base(session)
-    adjustments, _ = _adjustments(session)
+    view, adjustments, _, as_of = _inputs(session)
     key = ("scenario", base["forecast_id"], sc.model_dump_json())
     if key not in session.cache:
         may_write(session)
         try:
-            fr = F.run_forecast(sc, adjustments=adjustments, settings=_settings(session), save=True)
+            fr = _run(session, sc, adjustments, view, as_of)
+        except Refusal:
+            raise
         except ValueError:                                 # unknown dish or supplier, date outside the window
             raise Refusal("scenario: the forecaster refused it (a dish or supplier it doesn't know, or a date "
                           "outside the forecast window)") from None
@@ -753,9 +945,28 @@ def preview_suggestion(session: Session, path: str) -> dict:
     return {"path": rel(session, p), "suggestion": s, **_dry_run(session, s), "approve_command": _command(session, p)}
 
 
+# ---------------------------------------------------------------- the owner's review (proposals only)
+def review_status(session: Session) -> dict:
+    from . import review
+    return review.status(session)
+
+
+def propose_decision(session: Session, finding: str, decision: str, note: str | None = None) -> dict:
+    from . import review
+    return review.propose(session, finding, decision, note, by="llm")
+
+
+def propose_accept_verified_errors(session: Session) -> dict:
+    from . import review
+    return review.accept_verified_errors(session)
+
+
 HANDLERS = {"get_cash_position": get_cash_position, "list_bills_due": list_bills_due, "lookup": lookup,
             "get_findings": get_findings, "scan_market": scan_market, "get_menu": get_menu,
             "list_upcoming_changes": list_upcoming_changes, "forecast_base": forecast_base,
             "forecast_scenario": forecast_scenario, "propose_fix": propose_fix,
-            "preview_suggestion": preview_suggestion}
+            "preview_suggestion": preview_suggestion, "bookkeeper_status": bookkeeper_status,
+            "review_status": review_status, "propose_decision": propose_decision,
+            "propose_accept_verified_errors": propose_accept_verified_errors}
+assert set().union(*STAGE_TOOLS.values()) == set(SPECS)
 assert HANDLERS.keys() == SPECS.keys()

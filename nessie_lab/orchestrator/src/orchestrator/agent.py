@@ -23,15 +23,29 @@ No ping-pong: a message carrying EndSessionContent, a review card, or one of our
 starting with NOTICE_PREFIX) never starts a turn; rate-limit, busy and refusal notices go out at most once per
 sender per window, then only acknowledgements.
 
-Agent mode (ORCHESTRATOR_USE_AGENTS=1): scan_market goes to the market scout (SCOUT_ADDR) and get_findings first
-asks the Bookkeeper (BOOKKEEPER_ADDR) for a fresh report, each with ctx.send_and_receive. The scout's MarketResult
-names a report file, which is loaded (data/market_reports/M-*.json only) into the in-process scan_market shape; the
-Bookkeeper's filename must be data/reports/R-*.json and that report is used. On a timeout, error or bad reply the
-in-process tool runs instead and the reply is marked degraded.
+Stage gates (stages.py): a peer is asked only for a tool the current stage offers (PeerDispatch checks before
+sending; adopt_market_report checks again), so no delegation path skips them.
 
-HTTP (GuardedServer, see there): no CORS, no proxy headers, a bearer token (data/orchestrator/rest_token) on
-POST /ask, /connect and /disconnect; GET /messages is never served. REST: POST /ask (AskRequest -> AskResponse)
-runs the same turn for the CLI and the demo. It is registered only when the server is bound to a loopback address."""
+The orchestrator is the SOLE SUPERVISOR. It delegates to two agents and uses the Forecaster and CH as tools:
+- Market scout (SCOUT_ADDR): scan_market (chat turns and the brief) goes to it as a MarketRequest, with
+  ctx.send_and_receive. Its MarketResult names a report file, which is loaded (data/market_reports/M-*.json only)
+  into the in-process scan_market shape.
+- Bookkeeper (BOOKKEEPER_ADDR): setup and update (POST /bookkeeper, which `orchestrator bookkeeper-setup --agents`
+  and `bookkeeper-update --agents` call, and the ORCHESTRATOR_BK_AUTO delta pre-turn) go to it as a ReportRequest.
+  The Bookkeeper runs its own Verifier loop and answers ONCE, later, from its Verifier handler, i.e. outside
+  send_and_receive's session; so the reply is matched by request_id (PeerReplies). Its filename must be
+  data/reports/R-*.json.
+Delegation is the DEFAULT in `serve` whenever SCOUT_ADDR / BOOKKEEPER_ADDR are set; ORCHESTRATOR_USE_AGENTS=0 turns
+it off, =1 forces it on (and, as before, lets an owner's chat get_findings ask the Bookkeeper for a run when there is
+no baseline yet; without the explicit 1 a chat never starts a Bookkeeper run). On a timeout, error or bad reply the
+in-process tool runs instead and the reply is marked degraded (a Bookkeeper run that timed out is NOT rerun
+in-process: it may still be running). The CLI and `brief` stay in-process unless --agents is passed.
+
+HTTP (GuardedServer, see there): no proxy headers, a bearer token (data/orchestrator/rest_token) on POST /ask,
+/bookkeeper, /connect, /disconnect and every /api route; GET /messages is never served. CORS only on /api, only for
+ORCHESTRATOR_ALLOWED_ORIGINS (never "*"). REST: POST /ask (AskRequest -> AskResponse) runs the same turn for the CLI;
+the JSON API for the frontend is in api.py. All are registered only when the server is bound to a loopback
+address. No route approves or applies anything."""
 import asyncio
 import contextlib
 import hmac
@@ -76,6 +90,11 @@ RATE_LIMIT, RATE_WINDOW = 10, 600                            # messages per send
 MAX_TRACKED = 5000                                           # senders the rate limiter and notices remember (LRU)
 MAX_SESSIONS = 500
 PEER_TIMEOUT = 25
+MAX_WAITING = 8                                              # peer replies awaited by request_id at once
+LOCAL_CLIENT_ENDPOINT = "http://127.0.0.1:8007/submit"       # 8006 is the Market scout's port
+CORS_METHODS = "GET, POST, OPTIONS"
+CORS_HEADERS = "Authorization, Content-Type"
+MAX_API_BODY = 64 * 1024
 TRUE, FALSE = ("1", "true", "yes", "on"), ("0", "false", "no", "off", "")
 REQUEST_ID = re.compile(r"[^A-Za-z0-9._-]")
 NOTICE_PREFIX = "BackHouse notice:"
@@ -302,6 +321,42 @@ def bind_localhost() -> str:
 
 
 # ---------------------------------------------------------------- HTTP guard
+def normalize_origin(origin: str) -> str | None:
+    """'HTTP://LocalHost:3000/' -> 'http://localhost:3000'; None when it is not an http(s) origin."""
+    try:
+        parts = urlsplit(origin.strip())
+        port = parts.port
+    except (ValueError, AttributeError):
+        return None
+    host = (parts.hostname or "").lower()
+    if parts.scheme.lower() not in ("http", "https") or not host or "@" in parts.netloc:
+        return None
+    if parts.path not in ("", "/") or parts.query or parts.fragment:
+        return None
+    host = f"[{host}]" if ":" in host else host
+    return f"{parts.scheme.lower()}://{host}" + (f":{port}" if port is not None else "")
+
+
+def parse_allowed_origins(text: str | None) -> frozenset[str]:
+    """ORCHESTRATOR_ALLOWED_ORIGINS: comma-separated browser origins (http://localhost:3000) the /api routes answer
+    with CORS. Loopback hosts only; "*" and anything malformed raise ValueError (serve won't start)."""
+    out = set()
+    for i, entry in enumerate((text or "").split(",")):
+        entry = entry.strip()
+        if not entry:
+            continue
+        where = f"ORCHESTRATOR_ALLOWED_ORIGINS entry {i + 1} ({entry[:60]!r})"
+        if "*" in entry:
+            raise ValueError(f"{where}: wildcards are never allowed; list each origin")
+        norm = normalize_origin(entry)
+        if norm is None:
+            raise ValueError(f"{where}: expected an origin like http://localhost:3000 (no path)")
+        if not _loopback_origin(norm):
+            raise ValueError(f"{where}: only loopback origins (localhost, 127.0.0.1, [::1]) are allowed")
+        out.add(norm)
+    return frozenset(out)
+
+
 def _loopback_origin(origin: str) -> bool:
     try:
         host = (urlsplit(origin).hostname or "").lower()
@@ -323,20 +378,27 @@ class GuardedServer(ASGIServer):
     - a request with an Origin header is refused unless the origin is loopback AND it carries the bearer token;
     - GET /messages is never served; POST /connect and /disconnect need the token, a loopback client, and an open
       inspector (closed by ORCHESTRATOR_INSPECTOR=0 or once a /connect succeeded);
-    - POST /ask needs the token (`Authorization: Bearer <data/orchestrator/rest_token>`).
+    - POST /ask needs the token (`Authorization: Bearer <data/orchestrator/rest_token>`);
+    - POST /bookkeeper (the owner's CLI with --agents) needs the token and a loopback client, and refuses any
+      Origin: no web page can start a Bookkeeper run;
+    - /api/* (the frontend's JSON API, api.py): a loopback client and Host, the token on every request but the CORS
+      preflight, and an Origin, when sent, must be one of ORCHESTRATOR_ALLOWED_ORIGINS (others get 403). For those
+      origins only: OPTIONS preflight answered (204) and every response echoes `Access-Control-Allow-Origin:
+      <that origin>` with `Vary: Origin`; never "*". Bodies over 64 KiB are refused.
     Everything else (/submit envelopes from agents, HEAD readiness probes) goes to uagents unchanged."""
 
     token: str = ""
     inspector_open: bool = False
+    allowed_origins: frozenset = frozenset()
 
     def _authed(self, headers: dict[bytes, bytes]) -> bool:
         value = headers.get(b"authorization", b"").decode("latin-1")
         scheme, _, given = value.partition(" ")
         return bool(self.token) and scheme.lower() == "bearer" and hmac.compare_digest(given.strip(), self.token)
 
-    async def _deny(self, send, status: int, error: str):
+    async def _deny(self, send, status: int, error: str, extra: list | None = None):
         await send({"type": "http.response.start", "status": status,
-                    "headers": [[b"content-type", b"application/json"]]})
+                    "headers": [[b"content-type", b"application/json"], *(extra or [])]})
         await send({"type": "http.response.body", "body": json.dumps({"error": error}).encode()})
 
     async def __call__(self, scope, receive, send):
@@ -349,6 +411,14 @@ class GuardedServer(ASGIServer):
         client = (scope.get("client") or ("",))[0]
         authed = self._authed(headers)
         origin = headers.get(b"origin")
+        if path == "/api" or path.startswith("/api/"):
+            return await self._api(scope, receive, send, headers, method, client, authed)
+        if path == "/bookkeeper":
+            if origin is not None or client not in LOOPBACK_IPS:
+                return await self._deny(send, 403, "forbidden")
+            if not authed:
+                return await self._deny(send, 401, "missing or wrong bearer token")
+            return await super().__call__(scope, receive, send)
         if origin is not None and not (_loopback_origin(origin.decode("latin-1")) and authed):
             return await self._deny(send, 403, "forbidden")
         if path == "/messages":
@@ -363,6 +433,50 @@ class GuardedServer(ASGIServer):
         if path == "/ask" and not authed:
             return await self._deny(send, 401, "missing or wrong bearer token")
         return await super().__call__(scope, receive, send)
+
+    def _cors(self, origin: str | None) -> list[list[bytes]]:
+        if origin is None:
+            return []
+        return [[b"access-control-allow-origin", origin.encode("latin-1")], [b"vary", b"Origin"]]
+
+    async def _api(self, scope, receive, send, headers, method, client, authed):
+        raw_origin = headers.get(b"origin")
+        origin = None
+        if raw_origin is not None:
+            origin = normalize_origin(raw_origin.decode("latin-1"))
+            if origin is None or origin not in self.allowed_origins:
+                return await self._deny(send, 403, "forbidden: origin not in ORCHESTRATOR_ALLOWED_ORIGINS")
+        host = (headers.get(b"host") or b"").decode("latin-1")
+        try:
+            host_name = (urlsplit(f"//{host}").hostname or "").lower()
+        except ValueError:
+            host_name = ""
+        if client not in LOOPBACK_IPS or host_name not in LOOPBACK:
+            return await self._deny(send, 403, "forbidden")
+        cors = self._cors(origin)
+        if method == "OPTIONS":
+            wanted = (headers.get(b"access-control-request-method") or b"").decode("latin-1").upper()
+            if origin is None or wanted not in ("GET", "POST"):
+                return await self._deny(send, 403, "forbidden")
+            await send({"type": "http.response.start", "status": 204, "headers": cors + [
+                [b"access-control-allow-methods", CORS_METHODS.encode()],
+                [b"access-control-allow-headers", CORS_HEADERS.encode()],
+                [b"access-control-max-age", b"600"]]})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        if not authed:
+            return await self._deny(send, 401, "missing or wrong bearer token", cors)
+        try:
+            if int(headers.get(b"content-length") or 0) > MAX_API_BODY:
+                return await self._deny(send, 413, "request body too large", cors)
+        except ValueError:
+            return await self._deny(send, 400, "bad content-length", cors)
+
+        async def with_cors(message):
+            if message.get("type") == "http.response.start" and cors:
+                message = {**message, "headers": [*(message.get("headers") or []), *cors]}
+            await send(message)
+        return await super().__call__(scope, receive, with_cors)
 
     def _watch_connect(self, send):
         """Close the inspector routes once Agentverse accepted the mailbox."""
@@ -393,12 +507,13 @@ class GuardedServer(ASGIServer):
             await self._server.serve()
 
 
-def guard_server(agent, token: str, inspector_open: bool) -> GuardedServer:
+def guard_server(agent, token: str, inspector_open: bool, allowed_origins: frozenset = frozenset()) -> GuardedServer:
     server = agent._server
     if not isinstance(server, ASGIServer):
         raise TypeError("uagents changed: Agent._server is no longer an ASGIServer")
     server.__class__ = GuardedServer
     server.token, server.inspector_open = token, inspector_open
+    server.allowed_origins = frozenset(allowed_origins)
     return server
 
 
@@ -488,27 +603,101 @@ def _core(name: str):
     return importlib.import_module(f"orchestrator.{name}")
 
 
+def _has_bk_state(session) -> bool:
+    """A Bookkeeper baseline exists (bk_state): chats read it instead of asking the Bookkeeper for a full run."""
+    try:
+        from .bk_state import state_path
+        return state_path(session.root).is_file()
+    except Exception:
+        return False
+
+
+class PeerReplies:
+    """Replies a peer sends LATER, outside ctx.send_and_receive's session, matched by (peer, request_id). The
+    Bookkeeper answers a ReportRequest from the handler of its Verifier's reply, so its final ChatMessage carries
+    another session. At most MAX_WAITING requests wait at once; a reply nobody waits for is dropped (and, as before,
+    only acknowledged: no ping-pong)."""
+
+    def __init__(self, limit: int = MAX_WAITING):
+        self.limit = limit
+        self.waiting: dict[tuple[str, str], asyncio.Future] = {}
+
+    def expect(self, peer: str, request_id: str) -> asyncio.Future:
+        self.waiting = {k: f for k, f in self.waiting.items() if not f.done()}
+        if len(self.waiting) >= self.limit:
+            raise RuntimeError("too many peer requests waiting")
+        future = asyncio.get_running_loop().create_future()
+        self.waiting[(peer, request_id)] = future
+        return future
+
+    def drop(self, peer: str, request_id: str):
+        future = self.waiting.pop((peer, request_id), None)
+        if future is not None and not future.done():
+            future.cancel()
+
+    def deliver(self, peer: str, message: ChatMessage) -> bool:
+        try:
+            body = json.loads("\n".join(p.text for p in message.content if isinstance(p, TextContent)))
+        except (ValueError, AttributeError):
+            return False
+        if not isinstance(body, dict) or not isinstance(body.get("request_id"), str):
+            return False
+        future = self.waiting.pop((peer, body["request_id"]), None)
+        if future is None or future.done():
+            return False
+        future.set_result(body)
+        return True
+
+
 class PeerDispatch:
     """dispatch() for run_tool_loop in agent mode. Remote results are appended to session.log (in the in-process
     tools' shape) so the guard, the controller and propose_fix see them; any failure falls back to the in-process
-    tool and marks the turn degraded."""
+    tool and marks the turn degraded.
 
-    def __init__(self, ctx, scout: str | None = None, bookkeeper: str | None = None, timeout: int = PEER_TIMEOUT):
+    bk_from_chat: get_findings with no Bookkeeper baseline asks the Bookkeeper for a run (only with an explicit
+    ORCHESTRATOR_USE_AGENTS=1 and an owner turn; the constructor default keeps the old behaviour for direct use).
+    replies / me: the service's PeerReplies and our own address, for ask_bookkeeper."""
+
+    def __init__(self, ctx, scout: str | None = None, bookkeeper: str | None = None, timeout: int = PEER_TIMEOUT,
+                 replies: PeerReplies | None = None, me: str | None = None, bk_from_chat: bool = True):
         self.ctx, self.scout, self.bookkeeper, self.timeout = ctx, scout, bookkeeper, timeout
+        self.replies, self.me, self.bk_from_chat = replies, me, bk_from_chat
         self.notes: list[str] = []
         self.degraded = False
+
+    async def ask_bookkeeper(self, payload: dict, timeout: float = 3600) -> tuple[dict | None, str]:
+        """Send a ReportRequest and wait for the Bookkeeper's reply matched by request_id (see PeerReplies); without
+        a PeerReplies, ctx.send_and_receive. (reply, why-not)."""
+        if self.replies is None or not payload.get("request_id"):
+            return await self._call(self.bookkeeper, payload, timeout)
+        rid = str(payload["request_id"])
+        try:
+            future = self.replies.expect(self.bookkeeper, rid)
+        except RuntimeError as exc:
+            return None, str(exc)
+        try:
+            await self.ctx.send(self.bookkeeper, chat_message([TextContent(type="text",
+                                                                           text=json.dumps(payload, default=str))]))
+            return await asyncio.wait_for(future, timeout), ""
+        except asyncio.TimeoutError:
+            return None, "timed out"
+        except Exception as exc:
+            return None, f"send failed ({type(exc).__name__})"
+        finally:
+            self.replies.drop(self.bookkeeper, rid)
 
     async def _local(self, session, name, args):
         from .llm import _default_dispatch
         return await _default_dispatch(session, name, args)
 
-    async def _call(self, address: str, payload: dict) -> tuple[dict | None, str]:
+    async def _call(self, address: str, payload: dict, timeout: float | None = None) -> tuple[dict | None, str]:
         """Send one ChatMessage of JSON and wait for the peer's ChatMessage reply. (reply, why-not)."""
         msg = chat_message([TextContent(type="text", text=json.dumps(payload, default=str))])
+        timeout = int(timeout or self.timeout)
         try:
             reply, status = await asyncio.wait_for(
-                self.ctx.send_and_receive(address, msg, response_type=ChatMessage, timeout=self.timeout),
-                self.timeout + 5)
+                self.ctx.send_and_receive(address, msg, response_type=ChatMessage, timeout=timeout),
+                timeout + 5)
         except asyncio.TimeoutError:
             return None, "timed out"
         except Exception as exc:
@@ -547,7 +736,18 @@ class PeerDispatch:
         except Exception as exc:
             return {"error": f"report not readable ({type(exc).__name__})"}
 
+    def _open(self, session, name) -> bool:
+        """The stage gate BEFORE anything goes to a peer: a tool outside the current stage is never delegated (the
+        in-process call then refuses it with the stage's message)."""
+        gate = getattr(_core("tools"), "allowed", None)
+        try:
+            return gate is None or bool(gate(session, name))
+        except Exception:
+            return False
+
     async def __call__(self, session, name, args):
+        if name in ("scan_market", "get_findings") and not self._open(session, name):
+            return await self._local(session, name, args)
         if name == "scan_market" and self.scout:
             items = args.get("items") if isinstance(args.get("items"), list) else []
             payload = {"request_id": self._request_id(session, "orch-scan"), "items": [str(i)[:80] for i in items][:50],
@@ -564,7 +764,13 @@ class PeerDispatch:
             self._fallback("market scout", why)
             result = await self._local(session, name, args)
             return {**result, "degraded": True} if isinstance(result, dict) else result
-        if name == "get_findings" and self.bookkeeper:
+        if name == "get_findings" and self.bookkeeper and _has_bk_state(session):
+            self.notes.append("bookkeeper: merged state used (the owner updates it with `orchestrator "
+                              "bookkeeper-update`); no new Bookkeeper run from a chat")
+        elif name == "get_findings" and self.bookkeeper and not self.bk_from_chat:
+            self.notes.append("bookkeeper: no baseline yet; a chat never starts a Bookkeeper run (the owner runs "
+                              "`orchestrator bookkeeper-setup --agents`); the latest report is used")
+        elif name == "get_findings" and self.bookkeeper:
             payload = {"request_id": self._request_id(session, "orch-bk"),
                        "nessie_tag": getattr(session, "tag", "boh-1loc"), "as_of": self._as_of(session)}
             reply, why = await self._call(self.bookkeeper, payload)
@@ -587,7 +793,8 @@ class PeerDispatch:
 class Orchestrator:
     def __init__(self, root: Path, allowed: set[str] | None, limiter: RateLimit | None = None, cards=False,
                  use_agents=False, scout=None, bookkeeper=None, llm_factory=None, offline=True, tag="boh-1loc",
-                 owners: set[str] | None = None, mailbox: bool | None = None, address: str | None = None):
+                 owners: set[str] | None = None, mailbox: bool | None = None, address: str | None = None,
+                 bk_from_chat: bool = False, peer_endpoints: dict[str, str] | None = None):
         self.root = Path(root)
         self.allowed = None if allowed is None else set(allowed)   # None = anyone (mailbox mode)
         self.mailbox = (allowed is None) if mailbox is None else mailbox
@@ -601,6 +808,11 @@ class Orchestrator:
         self.sessions: OrderedDict[str, object] = OrderedDict()
         self.running: set[str] = set()
         self.brief_cache: dict = {}                       # non-owner briefs, per (root, day)
+        self.bk_from_chat = bk_from_chat                  # explicit ORCHESTRATOR_USE_AGENTS=1 only
+        self.replies = PeerReplies()
+        self.peer_endpoints = dict(peer_endpoints or {})  # for /api/health's reachability probe
+        self.bk_running = False                           # one Bookkeeper setup/update at a time
+        self.probe = None                                 # api.py sets the default HTTP probe
 
     def new_session(self):
         from .session import Session
@@ -614,10 +826,68 @@ class Orchestrator:
             self.sessions.popitem(last=False)
         return self.sessions[key]
 
-    def dispatch(self, ctx):
-        if self.use_agents and (self.scout or self.bookkeeper):
-            return PeerDispatch(ctx, self.scout, self.bookkeeper)
+    @property
+    def delegating(self) -> bool:
+        return bool(self.use_agents and (self.scout or self.bookkeeper))
+
+    def dispatch(self, ctx, owner: bool = True):
+        if self.delegating:
+            return PeerDispatch(ctx, self.scout, self.bookkeeper, replies=self.replies, me=self.address,
+                                bk_from_chat=self.bk_from_chat and owner)
         return None
+
+    async def bookkeeper_op(self, ctx, op: str, force: bool = False, timeout: float | None = None) -> dict:
+        """The owner's Bookkeeper setup / update, from POST /bookkeeper. Delegated to the Bookkeeper agent when
+        BOOKKEEPER_ADDR is set and delegation is on; in-process (the subprocess) otherwise, or as the degraded
+        fallback when the agent fails fast. Never raises: {"status", ..., "degraded", "notes"}."""
+        from . import bk_runner as R
+        from . import bk_state as S
+
+        if op not in ("setup", "update"):
+            return {"status": "error", "error": "op must be setup or update", "degraded": False, "notes": []}
+        if self.bk_running:
+            return {"status": "busy", "error": "a Bookkeeper run is already in progress", "degraded": False,
+                    "notes": []}
+        self.bk_running = True
+        notes, degraded = [], False
+        limit = timeout or (R.SETUP_TIMEOUT if op == "setup" else R.UPDATE_TIMEOUT)
+        try:
+            if self.use_agents and self.bookkeeper:
+                d = PeerDispatch(ctx, bookkeeper=self.bookkeeper, replies=self.replies, me=self.address)
+
+                async def agent(payload):
+                    reply, why = await d.ask_bookkeeper(payload, limit)
+                    if reply is None:
+                        if why == "timed out":
+                            raise asyncio.TimeoutError()
+                        raise R.BookkeeperError(f"the Bookkeeper agent {why}")
+                    return reply
+                try:
+                    if op == "setup":
+                        out = await R.asetup(self.root, agent, limit, force, self.tag, self.address or R.SENDER)
+                    else:
+                        out = await R.aupdate(self.root, agent, limit, self.tag, True, self.address or R.SENDER)
+                    return {**out, "degraded": False, "notes": ["delegated to the Bookkeeper agent"]}
+                except R.AgentTimeout as exc:              # it may still be running: no second run in-process
+                    return {"status": "error", "error": str(exc), "degraded": True,
+                            "notes": ["Bookkeeper agent timed out; not rerun in-process"]}
+                except (R.BookkeeperError, S.StateError) as exc:
+                    if "agent" not in str(exc):            # the report itself was bad: don't run again
+                        return {"status": "error", "error": str(exc), "degraded": True, "notes": []}
+                    degraded = True
+                    notes.append(f"degraded: {clean_text(str(exc), 200)}; ran the Bookkeeper in-process instead")
+            fn = R.setup if op == "setup" else R.update
+            kw = {"force": force} if op == "setup" else {}
+            out = await asyncio.to_thread(lambda: fn(self.root, timeout=limit, tag=self.tag,
+                                                     progress=lambda *_: None, **kw))
+            return {**out, "degraded": degraded, "notes": notes + ["ran in-process (subprocess)"]}
+        except (R.BookkeeperError, S.StateError) as exc:
+            return {"status": "error", "error": str(exc), "degraded": degraded, "notes": notes}
+        except Exception as exc:
+            return {"status": "error", "error": f"Bookkeeper {op} failed ({type(exc).__name__})",
+                    "degraded": degraded, "notes": notes}
+        finally:
+            self.bk_running = False
 
     def is_owner(self, sender: str) -> bool:
         return not self.mailbox or sender in self.owners
@@ -640,7 +910,7 @@ class Orchestrator:
             from .turn import proposals
             session = self.session(key, reset)
             before = {p["path"] for p in proposals(session)}
-            result = await turn(session, text, llm=self.llm_factory(), dispatch=self.dispatch(ctx), owner=owner,
+            result = await turn(session, text, llm=self.llm_factory(), dispatch=self.dispatch(ctx, owner), owner=owner,
                                 brief_cache=self.brief_cache)
             new = [p for p in proposals(session) if p["path"] not in before]
             return result, new
@@ -675,7 +945,8 @@ def build_protocol(service: Orchestrator, peers_to_ignore: set[str] | None = Non
             return
         await ctx.send(sender, ChatAcknowledgement(timestamp=datetime.now(timezone.utc),
                                                    acknowledged_msg_id=message.msg_id))
-        if sender in ignore:                              # a late peer reply: never answer it (no ping-pong)
+        if sender in ignore:                              # a peer's reply: never answer it (no ping-pong)
+            service.replies.deliver(sender, message)      # ...but a request waiting for it gets it
             return
         if service.allowed is not None and sender not in service.allowed:
             ctx.logger.warning(f"Orchestrator refused a message from {sender[:80]}")
@@ -758,6 +1029,48 @@ def build_ask_handler(service: Orchestrator):
     return ask
 
 
+class BookkeeperOpRequest(Model):
+    op: str                                               # "setup" | "update"
+    force: bool = False
+    timeout: float | None = None
+
+
+class BookkeeperOpResponse(Model):
+    status: str
+    report: str | None = None
+    covered_through: str | None = None
+    verified: bool | None = None
+    verification: str | None = None
+    error: str | None = None
+    degraded: bool = False
+    notes: list[str] = []
+    detail: dict = {}
+
+
+def build_bookkeeper_handler(service: Orchestrator):
+    """POST /bookkeeper: the owner's CLI (`bookkeeper-setup --agents` / `bookkeeper-update --agents`). Token, a
+    loopback client and no Origin (GuardedServer). Starts a Bookkeeper run; approves and applies nothing."""
+    async def handle(ctx: Context, request: BookkeeperOpRequest) -> BookkeeperOpResponse:
+        timeout = request.timeout if request.timeout and 10 <= request.timeout <= 4 * 3600 else None
+        out = await service.bookkeeper_op(ctx, request.op, bool(request.force), timeout)
+        keep = {k: v for k, v in out.items() if isinstance(v, (str, int, float, bool, type(None), dict, list))}
+        return BookkeeperOpResponse(status=str(out.get("status")), report=out.get("report"),
+                                    covered_through=out.get("covered_through"), verified=out.get("verified"),
+                                    verification=out.get("verification"), error=out.get("error"),
+                                    degraded=bool(out.get("degraded")), notes=list(out.get("notes") or []),
+                                    detail=json.loads(json.dumps(keep, default=str)))
+    return handle
+
+
+def delegation_default(scout: str | None, bookkeeper: str | None) -> tuple[bool, bool]:
+    """(use_agents, bk_from_chat). Delegation is on by default in serve when an address is set;
+    ORCHESTRATOR_USE_AGENTS=0/1 overrides. Only an explicit 1 lets a chat ask the Bookkeeper for a run."""
+    raw = os.getenv("ORCHESTRATOR_USE_AGENTS")
+    explicit = env_flag("ORCHESTRATOR_USE_AGENTS") if raw is not None and raw.strip() else None
+    use = bool(scout or bookkeeper) if explicit is None else explicit
+    return use, explicit is True
+
+
 def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=None):
     seed = os.getenv("ORCHESTRATOR_SEED", "").strip()
     if not seed:
@@ -765,8 +1078,9 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
     mailbox = mailbox or env_flag("ORCHESTRATOR_MAILBOX")
     peers = env_peers()                                   # validated in both modes: a typo refuses to start
     cards = env_flag("ORCHESTRATOR_CARDS", default=mailbox)
-    use_agents = env_flag("ORCHESTRATOR_USE_AGENTS")
     scout, bookkeeper = env_address("SCOUT_ADDR"), env_address("BOOKKEEPER_ADDR")
+    use_agents, bk_from_chat = delegation_default(scout, bookkeeper)
+    origins = parse_allowed_origins(os.getenv("ORCHESTRATOR_ALLOWED_ORIGINS"))
     owners = env_owners()
     inspector = mailbox and env_flag("ORCHESTRATOR_INSPECTOR", default=True)
     if use_agents and not (scout or bookkeeper):
@@ -785,7 +1099,7 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
         client = local_client_address(root)
         if client in peers:
             raise ValueError("ORCHESTRATOR_PEERS lists the local client; set ORCHESTRATOR_LOCAL_CLIENT_ENDPOINT instead")
-        rules = {client: os.getenv("ORCHESTRATOR_LOCAL_CLIENT_ENDPOINT", "http://127.0.0.1:8006/submit"), **peers}
+        rules = {client: os.getenv("ORCHESTRATOR_LOCAL_CLIENT_ENDPOINT", LOCAL_CLIENT_ENDPOINT), **peers}
         allowed = allowed_senders(root)
         resolver = LocalFirstResolver(rules)
         options = {"endpoint": [f"http://127.0.0.1:{port}/submit"], "registration_policy": LocalRegistration(),
@@ -793,16 +1107,24 @@ def make_agent(root: Path = DEFAULT_ROOT, port=8005, mailbox=False, llm_factory=
     agent = Agent(name="backhouse_orchestrator", seed=seed, port=port, resolve=resolver,
                   handle_messages_concurrently=True, report_events=False, **options)
     token = new_rest_token(root)
-    guard_server(agent, token, inspector_open=inspector)
+    guard_server(agent, token, inspector_open=inspector, allowed_origins=origins)
     service = Orchestrator(root, allowed, cards=cards, use_agents=use_agents, scout=scout, bookkeeper=bookkeeper,
                            llm_factory=llm_factory, offline=env_flag("ORCHESTRATOR_OFFLINE", default=True),
                            tag=os.getenv("ORCHESTRATOR_TAG", "boh-1loc").strip() or "boh-1loc",
-                           owners=owners, mailbox=mailbox, address=agent.address)
+                           owners=owners, mailbox=mailbox, address=agent.address, bk_from_chat=bk_from_chat,
+                           peer_endpoints=peers)
     agent.include(build_protocol(service, {a for a in (scout, bookkeeper) if a}), publish_manifest=mailbox)
     if host in LOOPBACK:
+        from . import api
+
         agent.on_rest_post("/ask", AskRequest, AskResponse)(build_ask_handler(service))
+        agent.on_rest_post("/bookkeeper", BookkeeperOpRequest, BookkeeperOpResponse)(build_bookkeeper_handler(service))
+        api.register(agent, service)
     else:
-        LOG.warning("POST /ask is disabled: the server is bound to %s, not a loopback address", host)
+        LOG.warning("POST /ask, /bookkeeper and /api are disabled: the server is bound to %s, not a loopback address",
+                    host)
+    if use_agents:
+        LOG.info("delegating: scout=%s bookkeeper=%s", bool(scout), bool(bookkeeper))
     print(f"orchestrator: REST token for POST /ask (also in data/orchestrator/rest_token): {token}")
     agent.orchestrator = service                          # for tests and the CLI
     return agent

@@ -141,7 +141,9 @@ export function ChangesSection({ plan, market, step, started }: { plan: Plan | n
   const note = plan
     ? plan.fixes.length
       ? null
-      : "Nothing the forecast supports right now. The orchestrator only suggests changes that keep your cash longer."
+      : plan.stage?.stage && plan.stage.stage !== "Suggest"
+        ? `The orchestrator suggests changes after you review the Bookkeeper's findings and commit that review at your terminal. Now: ${plan.stage.stage}. ${plan.stage.why ?? ""}`
+        : "Nothing the forecast supports right now. The orchestrator only suggests changes that keep your cash longer."
     : !started
       ? "After a check, the orchestrator suggests changes here, each with what it does to your cash. Nothing changes until you approve it."
       : step?.state === "waiting"

@@ -151,6 +151,18 @@ def _orchestrate(run):
             _step(run, "market", "waiting", "Market scout didn't run")
         _step(run, "orchestrator", "waiting", f"The orchestrator couldn't run: {str(e)[:200]}")
         return
+    stage = (plan.get("stage") or {}).get("stage")
+    if stage and stage != "Suggest":             # the orchestrator's gates: no scan or fixes before the owner's review
+        why = (plan["stage"].get("why") or "").rstrip(".")
+        if not scanned:
+            _step(run, "market", "waiting", "Price comparison opens after the owner's review is committed")
+        if plan["cash_cents"] is not None:
+            _check(run, "orchestrator", "pass", f"${plan['cash_cents'] / 100:,.2f} in the bank on {_day(plan['as_of'])}")
+        _check(run, "orchestrator", "pending", f"Stage: {stage}. {why}")
+        run.emit(type="plan", plan=plan)
+        span.done(f"Stage {stage}: waiting for the owner's review")
+        _step(run, "orchestrator", "done", f"Waiting for the owner's review of the findings (stage: {stage})")
+        return
     if not scanned:
         _step(run, "market", "waiting", "Market scout didn't run")
         _step(run, "orchestrator", "working", "Looking for changes that help your cash")

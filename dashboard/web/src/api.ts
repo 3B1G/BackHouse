@@ -96,6 +96,7 @@ export type PricePosition = {
 
 /** The orchestrator's brief at the end of a check. */
 export type Plan = {
+  stage?: { stage: string | null; why: string | null } | null;
   as_of: string | null;
   cash_cents: number | null;
   bills: { before: string; count: number; total_cents: number } | null;

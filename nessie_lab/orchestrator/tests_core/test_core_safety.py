@@ -14,7 +14,7 @@ from orchestrator.brief import brief
 from orchestrator.session import Session
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "orchestrator"
-CORE = ["env.py", "session.py", "fmt.py", "tools.py", "controller.py", "brief.py", "checks_interim.py", "cli.py"]
+CORE = ["env.py", "session.py", "fmt.py", "tools.py", "controller.py", "brief.py", "checks_bk.py", "stages.py", "review.py", "api.py", "cli.py"]
 MONEY = re.compile(r"-?\$\d[\d,]*\.\d{2}")
 
 
@@ -103,10 +103,21 @@ REAL_DATA = env.NESSIE_LAB / "data"
 @pytest.mark.realdata
 @pytest.mark.skipif(not (REAL_DATA / "cost_price.db").exists() or not (REAL_DATA / "features.db").exists(),
                     reason="generated nessie_lab/data not present")
-def test_brief_on_a_copy_of_the_real_data(tmp_path, no_network, no_llm_key, roles, tripwire):
-    """The real Forecaster, Market scout (saved pages) and CH dry run on a scratch copy (data/grader/ is skipped)."""
-    shutil.copytree(REAL_DATA, tmp_path / "data", ignore=lambda d, names: ["grader"] if Path(d) == REAL_DATA else [])
+def test_brief_on_a_copy_of_the_real_data(tmp_path, no_network, no_llm_key, roles, tripwire, monkeypatch):
+    """The real Forecaster, Market scout (saved pages) and CH dry run on a scratch copy (data/grader/ is skipped).
+    With the gates on (no Bookkeeper report in the real data): the Audit stage, cash and bills only, nothing written.
+    Then with the gates opened by hand, the full brief as before."""
+    local = ["grader", "orchestrator", "reports", "suggestions"]          # this laptop's review state stays out of the copy
+    shutil.copytree(REAL_DATA, tmp_path / "data", ignore=lambda d, names: local if Path(d) == REAL_DATA else [])
     assert not (tmp_path / "data" / "grader").exists()
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in (tmp_path / "data").rglob("*") if p.is_file())
+    gated = brief(Session(tmp_path))
+    assert gated["text"].startswith("Stage: Audit") and "Cash on 2026-10-24: $157,631.48" in gated["text"]
+    assert gated["suggestions"] == [] and "Runway" not in gated["text"] and "Market (" not in gated["text"]
+    after = sorted(p.relative_to(tmp_path).as_posix() for p in (tmp_path / "data").rglob("*") if p.is_file())
+    assert after == before                                                 # the Audit brief writes nothing
+    from orchestrator import stages
+    monkeypatch.setattr(stages, "current", lambda s: stages.StageView(stages.SUGGEST, "test"))
     session = Session(tmp_path)
     out = brief(session)
     text = out["text"]

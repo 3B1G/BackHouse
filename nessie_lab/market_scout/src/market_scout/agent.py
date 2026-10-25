@@ -222,7 +222,7 @@ def bind_localhost():
     return uagents.asgi.HOST
 
 
-def make_agent(root: Path, port=8003, local_only=False, offline=None):
+def make_agent(root: Path, port=8006, local_only=False, offline=None):
     seed = os.getenv("MARKET_SCOUT_SEED")
     if not seed:
         raise ValueError("Set MARKET_SCOUT_SEED to a private, stable seed before serving")
@@ -249,7 +249,7 @@ def make_agent(root: Path, port=8003, local_only=False, offline=None):
     return agent
 
 
-def run_client(target: str, request: MarketRequest, port=8004, endpoint="http://127.0.0.1:8003/submit",
+def run_client(target: str, request: MarketRequest, port=8004, endpoint="http://127.0.0.1:8006/submit",
                root: Path = DEFAULT_ROOT):
     """Send one request, print the reply, then stop."""
     bind_localhost()

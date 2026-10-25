@@ -17,7 +17,13 @@ turn(session, user_text, llm=None, ..., owner=True) -> {"text", "suggestions", "
   passes, the brief fallback only gets what is left, and the deadline is cancelled when the turn returns, so a
   tool thread left over from a timed-out turn writes nothing more.
 - No key, no client, or any loop error: the deterministic brief, degraded=True, with a note saying why.
-- Every reply ends with the fixed line FOOTER."""
+- Every reply ends with the fixed line FOOTER.
+- Stage gates: the model is offered tools.tools_for(session, owner) again before every request (the stage can move
+  inside a turn), the system prompt gets one code-written stage line, and the brief's market scan goes to the Market
+  scout only when the stage allows a scan. The owner's own words are kept on session.owner_texts (an LLM's note on a
+  finding is kept only if it is in there verbatim).
+- Before the turn, bk_runner.pre_turn adds a note when the Bookkeeper state is behind the bank (and, only with
+  ORCHESTRATOR_BK_AUTO=1 and a delta-capable Bookkeeper, runs a quick delta update within the deadline)."""
 import asyncio
 import importlib
 import inspect
@@ -35,7 +41,7 @@ LOG = logging.getLogger("orchestrator.turn")
 MAX_INPUT = 4000
 DEADLINE = 60
 FOOTER = "Nothing has been changed; approve at your terminal to apply."
-OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion"))
+OWNER_ONLY = frozenset(("propose_fix", "preview_suggestion", "propose_decision", "propose_accept_verified_errors"))
 PUBLIC_PROMPT = SYSTEM_PROMPT + """
 8. This chat is NOT from the restaurant's owner. Share facts only. You cannot propose or preview changes here: if
    they ask for a change, tell them to ask the owner."""
@@ -166,22 +172,50 @@ def _today():
     return datetime.now(ZoneInfo("America/Los_Angeles")).date()
 
 
+async def prefetch_scan(session, dispatch, stop: Deadline | None = None):
+    """The served orchestrator delegates the brief's market scan to the Market scout agent: (scan or None, notes,
+    degraded). Only with a PeerDispatch that has a scout address; it falls back in-process (degraded) itself."""
+    if not getattr(dispatch, "scout", None):
+        return None, [], False
+    gate = getattr(_core("tools"), "allowed", None)
+    try:
+        if gate is not None and not gate(session, "scan_market"):
+            return None, [], False                        # not this stage: the scout is never asked
+    except Exception:
+        return None, ["market scout skipped: the stage could not be checked"], False
+    remaining = stop.remaining() if stop is not None else float(DEADLINE)
+    if remaining < 10:
+        return None, ["market scout skipped: not enough time left"], False
+    try:
+        scan = await asyncio.wait_for(dispatch(session, "scan_market", {}), remaining - 5)
+    except Exception as exc:                              # the brief then scans in-process
+        return None, [f"degraded: market scout failed ({type(exc).__name__}); scanned in-process"], True
+    notes = list(getattr(dispatch, "notes", None) or [])
+    if isinstance(scan, dict) and "error" not in scan:
+        return scan, notes, bool(getattr(dispatch, "degraded", False))
+    return None, notes, bool(getattr(dispatch, "degraded", False))
+
+
 async def from_brief(session, notes, degraded, stop: Deadline | None = None, owner: bool = True,
-                     cache: dict | None = None) -> dict:
+                     cache: dict | None = None, dispatch=None) -> dict:
     """The deterministic brief, inside what is left of the turn's deadline. owner=False: no suggestions, and the
-    text is cached per (root, day) in `cache` so a crowd of chat users costs one brief a day."""
+    text is cached per (root, day) in `cache` so a crowd of chat users costs one brief a day. dispatch: a
+    PeerDispatch (the served orchestrator): the market scan goes to the Market scout agent first."""
     key = None
     if not owner and cache is not None:
         key = (str(getattr(session, "root", "")), _today().isoformat())
         if key in cache:
             return _result(cache[key], session, degraded, [*notes, "brief: today's cached copy"])
+    scan, more, worse = await prefetch_scan(session, dispatch, stop)
+    notes, degraded = [*notes, *more], degraded or worse
     remaining = stop.remaining() if stop is not None else float(DEADLINE)
     if remaining < 1:
         return _result("I ran out of time before I could build the brief. Ask again in a moment.", session, True,
                        [*notes, "deadline reached before the brief"])
     fn = _core("brief").brief
+    extra = {"scan": scan} if scan is not None else {}
     try:
-        work = (lambda: fn(session)) if owner else (lambda: fn(session, propose=False))
+        work = (lambda: fn(session, **extra)) if owner else (lambda: fn(session, propose=False, **extra))
         b = await asyncio.wait_for(asyncio.to_thread(work), remaining)
         text = _brief_text(b) or "No brief is available yet."
         if key is not None and _brief_text(b):
@@ -223,9 +257,23 @@ async def turn(session, user_text: str, llm: ASIClient | None = None, dispatch=N
     except AttributeError:
         pass
     try:
-        return await _turn(session, user_text, llm, dispatch, stop, owner, brief_cache)
+        pre = [] if card_action(clean_text(user_text)) else await _bookkeeper_notes(session, stop, dispatch)
+        out = await _turn(session, user_text, llm, dispatch, stop, owner, brief_cache)
+        if pre and isinstance(out, dict):
+            out["notes"] = [*pre, *(out.get("notes") or [])]
+        return out
     finally:
         stop.cancel()                                     # leftover tool threads from this turn write nothing
+
+
+async def _bookkeeper_notes(session, stop, dispatch) -> list[str]:
+    """bk_runner.pre_turn: a note when the Bookkeeper state is behind the bank; with ORCHESTRATOR_BK_AUTO=1 and a
+    delta-capable Bookkeeper, a quick delta update inside this turn's deadline. Never a full rerun; never raises."""
+    try:
+        from .bk_runner import pre_turn
+        return await pre_turn(session, stop, dispatch)
+    except Exception:
+        return []
 
 
 async def _turn(session, user_text, llm, dispatch, stop: Deadline, owner: bool, brief_cache) -> dict:
@@ -236,17 +284,31 @@ async def _turn(session, user_text, llm, dispatch, stop: Deadline, owner: bool, 
     if not text:
         return _result("Ask me about cash, bills, the menu, findings or the forecast.", session, notes=["empty"])
     if BRIEF_INTENT.match(text):
-        return await from_brief(session, ["answered from the deterministic brief"], False, stop, owner, brief_cache)
+        return await from_brief(session, ["answered from the deterministic brief"], False, stop, owner, brief_cache,
+                                dispatch)
     if llm is None:
         llm = ASIClient()
     if not getattr(llm, "available", False):
         return await from_brief(session, ["ASI:One unavailable (no API key); showing the deterministic brief"], True,
-                                stop, owner, brief_cache)
+                                stop, owner, brief_cache, dispatch)
     notes, counts = [], {}
     kw = {"dispatch": dispatch, "counts": counts}
+    core = _core("tools")
+    if owner:
+        texts = getattr(session, "owner_texts", None)
+        if isinstance(texts, list):
+            texts.append(text)
     if not owner:
         kw.update(dispatch=_public_dispatch(dispatch), system=PUBLIC_PROMPT,
-                  tools=[t for t in _core("tools").TOOLS if t["function"]["name"] not in OWNER_ONLY])
+                  tools=[t for t in core.TOOLS if t["function"]["name"] not in OWNER_ONLY])
+    tools_for, stage_line = getattr(core, "tools_for", None), getattr(core, "stage_line", None)
+    if tools_for is not None:
+        kw["tools"] = lambda s: [t for t in tools_for(s, owner) if owner or t["function"]["name"] not in OWNER_ONLY]
+    if stage_line is not None:
+        try:
+            kw["system"] = (PUBLIC_PROMPT if not owner else SYSTEM_PROMPT) + "\n" + stage_line(session)
+        except Exception:
+            pass
     try:
         out = await run_tool_loop(session, text, llm, deadline=stop.remaining(), **kw)
         answer = clean_text(out["text"], 20_000)          # normalised first: this exact string is guarded and sent
